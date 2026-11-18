@@ -45,6 +45,18 @@ test('local training maximum stays unknown until an allocation is reported; clou
   expect(await readModelWindow(f.engine, cloud, 'large')).toMatchObject({ maximum: 1048576, effective: 1048576, source: 'cloud' })
 })
 
+test('offline startup uses the selected endpoint cloud cache without assuming a local allocation', async () => {
+  const f = fixture()
+  f.offline()
+  await f.engine.store.set(`model-discovery-v1:${encodeURIComponent(local.base)}`, [
+    { name: 'kimi:cloud', isCloud: true, isDecision: false, contextLength: 262144, efforts: [] },
+    { name: 'local-model', isCloud: false, isDecision: false, contextLength: 0, maximumContext: 1048576, efforts: [] },
+  ])
+  expect(await readModelWindow(f.engine, local, 'kimi:cloud')).toMatchObject({ effective: 262144, source: 'cloud' })
+  expect((await readModelWindow(f.engine, cloud, 'kimi:cloud')).effective).toBe(undefined)
+  expect((await readModelWindow(f.engine, local, 'local-model')).effective).toBe(undefined)
+})
+
 test('manual windows are endpoint/model scoped, bounded by known maximum, and reset without metadata', async () => {
   const f = fixture()
   expect((await saveModelWindow(f.engine, local, 'large', '65536')).effective).toBe(65536)

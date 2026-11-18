@@ -72,13 +72,14 @@ async function discover(url, catalogFile) {
   return { rows: [...new Map(result.map(item => [item.model, item])).values()], complete }
 }
 
-export async function configure({ mode = 'install', settingsPath, url = process.env.OLLAMA_HOST || 'http://localhost:11434', catalogFile, catalog }) {
-  if (!['install', 'remove'].includes(mode)) throw new Error('Use install or remove.')
+export async function configure({ mode = 'install', settingsPath, url = process.env.OLLAMA_HOST || 'http://localhost:11434', catalogFile, catalog, nativeModel }) {
+  if (!['install', 'remove', 'startup'].includes(mode)) throw new Error('Use install, remove, or startup.')
+  if (mode === 'startup' && (typeof nativeModel !== 'string' || !nativeModel.trim())) throw new Error('Startup requires a native model.')
   const file = settingsPath || path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'settings.json')
   if (!path.isAbsolute(file)) throw new Error('--settings must be an absolute file path.')
   const sidecar = `${file}.ollama-model-picker.json`
   // Discover before opening any output: connection failure changes no settings.
-  const { rows: discovered, complete } = mode === 'install'
+  const { rows: discovered, complete } = mode !== 'remove'
     ? catalog !== undefined ? catalogRows(catalog) : await discover(url, catalogFile)
     : { rows: [], complete: true }
   await fs.mkdir(path.dirname(file), { recursive: true })
@@ -108,7 +109,7 @@ export async function configure({ mode = 'install', settingsPath, url = process.
         options.push(item); owned.push(item); count++
       }
       if (current || options.length) settings.modelPicker = { ...current, options }
-    } else {
+    } else if (mode === 'remove') {
       const remaining = [...options]
       for (const own of owned) {
         const index = remaining.findIndex(item => isDeepStrictEqual(item, own))
@@ -120,6 +121,11 @@ export async function configure({ mode = 'install', settingsPath, url = process.
         else settings.modelPicker = { ...current, options: remaining }
       }
       owned = []
+    } else if (discovered.some(row => row.model === settings.model) && !discovered.some(row => row.model === nativeModel)) {
+      // The active session keeps its selected model. Only the next process
+      // starts on Claude, until the plugin has loaded Ollama's real context.
+      if (nativeModel === 'default') delete settings.model
+      else settings.model = nativeModel
     }
     const nextSettings = JSON.stringify(settings, null, 2) + '\n'
     // Retain ownership of stale rows through this commit too: if the settings
@@ -151,6 +157,7 @@ export async function configure({ mode = 'install', settingsPath, url = process.
     if (!isDeepStrictEqual(written.text === undefined ? undefined : picker(parse(written.text, 'Settings')), settings.modelPicker)) {
       throw Object.assign(new Error('Native model entries changed during setup; retry.'), { code: 'EAGAIN' })
     }
+    if (mode === 'startup' && (written.text === undefined ? undefined : parse(written.text, 'Settings').model) !== settings.model) throw Object.assign(new Error('Startup model changed during setup; retry.'), { code: 'EAGAIN' })
     if (mode === 'remove' && prior.text !== undefined) await fs.unlink(sidecar)
     return { settingsPath: file, mode, count }
   } finally {
@@ -174,12 +181,12 @@ async function main() {
       options.catalog = JSON.parse(text)
       continue
     }
-    const names = { '--settings': 'settingsPath', '--url': 'url', '--catalog': 'catalogFile' }
-    if (!names[args[index]] || !args[index + 1]) throw new Error('Usage: model-picker.mjs [install|remove] [--settings /absolute/settings.json] [--url http://localhost:11434] [--catalog models.json | --catalog-stdin]')
+    const names = { '--settings': 'settingsPath', '--url': 'url', '--catalog': 'catalogFile', '--native-model': 'nativeModel' }
+    if (!names[args[index]] || !args[index + 1]) throw new Error('Usage: model-picker.mjs [install|remove|startup] [--settings /absolute/settings.json] [--url http://localhost:11434] [--catalog models.json | --catalog-stdin] [--native-model MODEL]')
     options[names[args[index]]] = args[++index]
   }
   const result = await configure(options)
-  console.log(`${result.mode === 'install' ? 'Added' : 'Removed'} ${result.count} Ollama model row(s) in ${result.settingsPath}.`)
+  console.log(result.mode === 'startup' ? 'Native startup model preserved.' : `${result.mode === 'install' ? 'Added' : 'Removed'} ${result.count} Ollama model row(s) in ${result.settingsPath}.`)
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main().catch(error => {
   console.error(error.message)

@@ -25,6 +25,10 @@ function savedModels(value: unknown): OllamaModel[] {
     model.efforts.every((effort: unknown) => ['off', 'on', 'low', 'medium', 'high', 'xhigh', 'max'].includes(String(effort))))
 }
 
+export async function readCachedModels($: EngineInterface, connection: Connection): Promise<OllamaModel[]> {
+  return savedModels(await $.store.get(cacheKey(connection.base)).catch(() => undefined))
+}
+
 export async function loadModels($: EngineInterface, connection: Connection, force = false): Promise<Discovery> {
   const base = connection.base
   const now = await $.clock.now()
@@ -35,7 +39,7 @@ export async function loadModels($: EngineInterface, connection: Connection, for
   const loading = pending.get(base)
   if (loading) return loading
   const operation = (async () => {
-    const before = previous?.discovery.models ?? savedModels(await $.store.get(cacheKey(base)).catch(() => undefined))
+    const before = previous?.discovery.models ?? await readCachedModels($, connection)
     let discovery: Discovery
     try {
       discovery = await discoverModels($, connection)

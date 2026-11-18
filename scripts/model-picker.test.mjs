@@ -18,6 +18,19 @@ async function fixture(t, settings) {
 }
 const row = { model: 'test-model', label: 'Ollama · test-model', description: 'Local Ollama' }
 
+test('startup replaces only an Ollama launch default and preserves picker, preferences, and native choices', async t => {
+  const initial = { model: 'test-model', effortLevel: 'high', modelPicker: { options: [row] }, pluginConfigs: { ollama: { options: { modelCatalog: 'saved' } } } }
+  const f = await fixture(t, initial)
+  await configure({ ...f, mode: 'startup', nativeModel: 'opus' })
+  assert.deepEqual(await f.read(), { ...initial, model: 'opus' })
+  await configure({ ...f, mode: 'startup', nativeModel: 'sonnet' })
+  assert.equal((await f.read()).model, 'opus')
+  await fs.writeFile(f.settingsPath, JSON.stringify(initial))
+  await configure({ ...f, mode: 'startup', nativeModel: 'default' })
+  const { model, ...withoutModel } = initial
+  assert.deepEqual(await f.read(), withoutModel)
+})
+
 test('install is idempotent and remove preserves existing rows and settings', async t => {
   const initial = { model: 'opus', permissions: { allow: ['Read'] }, modelPicker: { options: [{ model: 'existing', label: 'Mine' }], replaceBuiltInOptions: true } }
   const f = await fixture(t, initial)

@@ -6,7 +6,7 @@ import { loadModels, syncNativePicker } from './discovery'
 import { copyChatPreferences, getPreferences, notice, preferenceOwner, readView, rememberClear, updateView } from './runtime'
 import { modeLabels, renderUI } from './ui'
 import { executionComplete, executionFetch, executionSpawn, executionStep } from './execution'
-import { modelSwitched, refreshModelCatalog, rememberNativeModel } from './models'
+import { modelSwitched, preserveNativeStartup, refreshModelCatalog, rememberNativeModel } from './models'
 import { cancelSelection, confirmSelection, isOwnSelection, scheduleSelection, selectModel } from './selection'
 import { refreshConfiguredWindow, resetWindows, saveModelWindow } from './window'
 import { composeRoutingContext, submitRoutingContext, refreshQueuedRoutingContext } from './context'
@@ -107,6 +107,7 @@ export const register: Register = on => {
     await $.command.register({ name: 'ollama', description: 'Configure Ollama for this chat', argumentHint: '[full MODEL | subagent MODEL | off | status]', immediate: true })
     await refresh($).catch(() => undefined)
     await rememberNativeModel($, await $.session.model()).catch(() => undefined)
+    await preserveNativeStartup($).catch(() => undefined)
     scheduleSelection($, await $.session.id())
     return started
   })
@@ -138,6 +139,7 @@ export const register: Register = on => {
     if (isOwnSelection(e)) {
       await rememberNativeModel($, e.to_model).catch(() => undefined)
       await refreshConfiguredWindow($).catch(() => undefined)
+      await preserveNativeStartup($).catch(() => undefined)
       return result
     }
     cancelSelection()
@@ -150,6 +152,7 @@ export const register: Register = on => {
       if (await $.session.id() === owner) await updateView($, current => ({ ...current, ...(preferences ? { preferences } : {}), notice: message(error) }))
     }
     await refreshConfiguredWindow($).catch(() => undefined)
+    await preserveNativeStartup($).catch(() => undefined)
     return result
   })
 

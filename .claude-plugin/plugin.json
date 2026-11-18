@@ -1,6 +1,6 @@
 {
   "name": "ollama",
-  "version": "0.1.32",
+  "version": "0.1.35",
   "description": "Use Ollama for this Claude Code chat or its native subagents",
   "types": "./types/index.d.ts",
   "author": {

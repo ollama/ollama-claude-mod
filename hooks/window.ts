@@ -3,6 +3,7 @@ import type { EngineInterface } from 'claude-code'
 import type { ModelWindow } from '../types'
 import { getConnection, runningContext, showModel } from './ollama'
 import type { Connection } from './ollama'
+import { readCachedModels } from './discovery'
 import { getPreferences, updateView } from './runtime'
 
 type Owner = { previous?: string; written?: string }
@@ -29,11 +30,11 @@ function overrideKey(connection: Connection, model: string): string {
 export async function readModelWindow($: EngineInterface, connection: Connection, model: string): Promise<ModelWindow> {
   if (!model) return { model, endpoint: connection.base, source: 'unknown' }
   const [metadata, allocation, saved] = await Promise.all([
-    showModel($, connection, model).catch(() => undefined),
+    showModel($, connection, model).catch(async () => (await readCachedModels($, connection)).find(item => item.name === model)),
     connection.base === 'https://ollama.com' ? undefined : runningContext($, connection, model).catch(() => undefined),
     $.store.get(overrideKey(connection, model)).catch(() => undefined),
   ])
-  const maximum = metadata?.maximumContext
+  const maximum = positive(metadata?.maximumContext) ? metadata.maximumContext : metadata?.isCloud && positive(metadata.contextLength) ? metadata.contextLength : undefined
   const detected = metadata?.isCloud ? maximum : positive(allocation) ? allocation : metadata?.parameterContext
   const capacity = detected && maximum ? Math.min(detected, maximum) : detected
   const override = positive(saved) && (!maximum || saved <= maximum) ? saved : undefined

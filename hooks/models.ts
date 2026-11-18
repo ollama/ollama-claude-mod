@@ -74,6 +74,17 @@ export async function rememberNativeModel($: EngineInterface, candidate: string,
   if (shouldPublish && sessionId === await $.session.id()) await $.store.set(NATIVE_GLOBAL, candidate)
 }
 
+export async function preserveNativeStartup($: EngineInterface): Promise<void> {
+  const current = await $.session.model()
+  if (!await isOllamaModel($, current)) return
+  const native = await resolveNativeModel($, current)
+  const result = await $.process.run(['node', `${$.plugin.root}/scripts/model-picker.mjs`, 'startup', '--native-model', native, '--catalog-stdin'], {
+    stdin: JSON.stringify({ models: [{ name: current, isCloud: current.endsWith(':cloud'), isDecision: false }], complete: false }),
+    timeoutMs: 10000,
+  })
+  if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'Could not preserve the startup model.')
+}
+
 export async function modelSwitched($: EngineInterface, e: ClassicHookInputs['PostModelSwitch']): Promise<Preferences | undefined> {
   if (e.agent_id) return undefined
   const sessionId = e.session_id
