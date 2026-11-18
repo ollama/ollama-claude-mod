@@ -6,8 +6,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { pathToFileURL } from 'node:url'
 
-const SOURCE = 'ollama-chat@ollama-chat-local'
-const DESTINATION = 'ollama@ollama-local'
+const SOURCES = ['ollama@ollama-local', 'ollama-chat@ollama-chat-local']
+const DESTINATION = 'ollama@ollama'
 
 // Verified against Claude Code 2.1.326's native store path function. Hash the
 // full identity, not its sanitized filename or the bare plugin name.
@@ -72,7 +72,7 @@ export async function migrateSettings({ configDir = process.env.CLAUDE_CONFIG_DI
   const storeDir = path.join(pluginDir, 'store')
   await directory(pluginDir)
   await directory(storeDir)
-  const sourceFile = path.join(storeDir, pluginStoreName(SOURCE))
+  const sourceFiles = SOURCES.map(id => path.join(storeDir, pluginStoreName(id)))
   const destinationFile = path.join(storeDir, pluginStoreName(DESTINATION))
   const settingsFile = path.join(configDir, 'settings.json')
   const lockFile = path.join(configDir, '.ollama-settings-migration.lock')
@@ -88,7 +88,7 @@ export async function migrateSettings({ configDir = process.env.CLAUDE_CONFIG_DI
     // Match the host's store lock directory. Refuse active native writers;
     // keep our leases fresh while preparing. Stop old/new chats before running:
     // a later write by the old identity cannot be redirected by this helper.
-    for (const file of [sourceFile, destinationFile].sort()) {
+    for (const file of [...sourceFiles, destinationFile].sort()) {
       const dir = `${file}.lock`
       try { await fs.mkdir(dir, { mode: 0o700 }) }
       catch (error) {
@@ -103,20 +103,26 @@ export async function migrateSettings({ configDir = process.env.CLAUDE_CONFIG_DI
       for (const { dir } of nativeLocks) void fs.utimes(dir, now, now).catch(() => {})
     }, 2000)
     heartbeat.unref()
-    const files = [sourceFile, destinationFile, settingsFile]
-    const snapshots = await Promise.all(files.map(read))
-    const [sourceSnapshot, destinationSnapshot, settingsSnapshot] = snapshots
-    const source = parse(sourceSnapshot, 'Source plugin store')
+    const [recentSnapshot, destinationSnapshot, settingsSnapshot] = await Promise.all([sourceFiles[0], destinationFile, settingsFile].map(read))
     const destination = parse(destinationSnapshot, 'Destination plugin store')
     const settings = parse(settingsSnapshot, 'Claude settings')
-    const merged = merge(source, destination, 'Plugin store')
     if (settings.pluginConfigs !== undefined && !object(settings.pluginConfigs)) throw new Error('pluginConfigs is malformed; left unchanged.')
     const configs = settings.pluginConfigs || {}
+    // Earlier migrations kept their source store. Prefer the newest identity
+    // that exists so an old snapshot cannot bring back superseded preferences.
+    const sourceIndex = recentSnapshot.text !== undefined || Object.hasOwn(configs, SOURCES[0]) ? 0 : 1
+    const sourceId = SOURCES[sourceIndex]
+    const sourceFile = sourceFiles[sourceIndex]
+    const sourceSnapshot = sourceIndex === 0 ? recentSnapshot : await read(sourceFile)
+    const files = [sourceFile, destinationFile, settingsFile]
+    const snapshots = [sourceSnapshot, destinationSnapshot, settingsSnapshot]
+    const source = parse(sourceSnapshot, 'Source plugin store')
+    const merged = merge(source, destination, 'Plugin store')
     let nextSettings = settings
-    if (Object.hasOwn(configs, SOURCE)) {
-      if (!object(configs[SOURCE])) throw new Error('Source plugin configuration is malformed; left unchanged.')
-      if (Object.hasOwn(configs, DESTINATION) && !isDeepStrictEqual(configs[SOURCE], configs[DESTINATION])) throw new Error('Plugin configuration has conflicting destination data; nothing was replaced.')
-      nextSettings = { ...settings, pluginConfigs: { ...configs, [DESTINATION]: configs[SOURCE] } }
+    if (Object.hasOwn(configs, sourceId)) {
+      if (!object(configs[sourceId])) throw new Error('Source plugin configuration is malformed; left unchanged.')
+      if (Object.hasOwn(configs, DESTINATION) && !isDeepStrictEqual(configs[sourceId], configs[DESTINATION])) throw new Error('Plugin configuration has conflicting destination data; nothing was replaced.')
+      nextSettings = { ...settings, pluginConfigs: { ...configs, [DESTINATION]: configs[sourceId] } }
     }
     const changes = []
     if (!isDeepStrictEqual(merged, destination)) changes.push({ file: destinationFile, value: merged, snapshot: destinationSnapshot })

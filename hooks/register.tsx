@@ -104,7 +104,7 @@ export const register: Register = on => {
     const started = await next(e)
     await resetActivity($, await $.session.id()).catch(() => undefined)
     await refreshAppearance($).catch(() => undefined)
-    await $.command.register({ name: 'ollama', description: 'Configure Ollama for this chat', argumentHint: '[full MODEL | subagent MODEL | off | status]', immediate: true })
+    await $.command.register({ name: 'ollama', description: 'Configure Ollama for this chat', argumentHint: '[full MODEL | subagent MODEL | off | status | uninstall]', immediate: true })
     await refresh($).catch(() => undefined)
     await rememberNativeModel($, await $.session.model()).catch(() => undefined)
     await preserveNativeStartup($).catch(() => undefined)
@@ -191,11 +191,21 @@ export const register: Register = on => {
   on('command.run', { command: 'ollama' }, async ($, e) => {
     try {
       const [command, ...rest] = e.args.trim().split(/\s+/)
+      if (command === 'uninstall') {
+        const scope = rest[0] ?? 'user'
+        if (rest.length > 1 || !['user', 'project', 'local'].includes(scope)) throw new Error('Use /ollama uninstall [user|project|local].')
+        if (e.origin.kind !== 'composer' || await $.env.get('CLAUDE_CODE_ENTRYPOINT') === 'claude-desktop') {
+          return { text: `Open Claude Code in your terminal and enter /ollama uninstall${rest.length ? ' ' + scope : ''}.`, isTextDisplayOnly: true }
+        }
+        const result = await $.process.run(['node', `${$.plugin.root}/scripts/model-picker.mjs`, 'uninstall', scope], { timeoutMs: 60000 })
+        if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'Could not finish uninstalling Ollama. Try /ollama uninstall again.')
+        return { text: result.stdout.trim(), isTextDisplayOnly: true }
+      }
       if (command === 'off') await persist($, { enabled: false })
       else if (command === 'full' || command === 'subagent') {
         const selected = rest.join(' ')
         await persist($, { mode: command, enabled: true, ...(selected ? { [command]: selected } : {}) })
-      } else if (command && command !== 'status') return { text: 'Use /ollama full MODEL, /ollama subagent MODEL, or /ollama off.', isTextDisplayOnly: true }
+      } else if (command && command !== 'status') return { text: 'Use /ollama full MODEL, /ollama subagent MODEL, /ollama off, /ollama status, or /ollama uninstall.', isTextDisplayOnly: true }
       else if (!command) {
         await updateView($, current => ({ ...current, settingsOpen: true, openMenu: null }))
         return { text: '', isTextDisplayOnly: true }

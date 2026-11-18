@@ -23,19 +23,6 @@ export function claudeSvg(): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="-60 -60 1320 1320"><path fill="#d97757" d="${CLAUDE}"/></svg>`
 }
 
-// A cog drawn rather than typed: the gear character is a different shape in every font.
-export function gearSvg(): string {
-  // Eight teeth: each one narrows from its root (radius 4.6) to its top (6.2).
-  const at = (degrees: number, radius: number) => {
-    const angle = (degrees * Math.PI) / 180
-
-    return `${(7 + radius * Math.cos(angle)).toFixed(2)} ${(7 + radius * Math.sin(angle)).toFixed(2)}`
-  }
-  const outline = [0, 45, 90, 135, 180, 225, 270, 315].flatMap(tooth => [at(tooth - 16, 4.6), at(tooth - 9, 6.2), at(tooth + 9, 6.2), at(tooth + 16, 4.6)])
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><style>${INK}</style><g class="s" fill="none" stroke-width="1.2" stroke-linejoin="round"><path d="M${outline.join('L')}Z"/><circle cx="7" cy="7" r="1.9"/></g></svg>`
-}
-
 // A redraw restarts the SVG pulse; the terminal keeps its frame separately.
 export function dotsSvg(): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="6" viewBox="0 0 18 6"><style>${INK}circle{opacity:.25;animation:p 1.2s ease-in-out infinite}circle:nth-child(2){animation-delay:.2s}circle:nth-child(3){animation-delay:.4s}@keyframes p{40%{opacity:1}}</style><g class="f"><circle cx="3" cy="3" r="2"/><circle cx="9" cy="3" r="2"/><circle cx="15" cy="3" r="2"/></g></svg>`

@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import { CLOUD_CATALOG, cloudModels, isChatModel, isCloudModel, modelRow } from '../hooks/catalog.ts'
 import { connectionAddress } from '../hooks/route.ts'
+import { canRegisterPicker, uninstallPlugin } from './plugin-installation.mjs'
 
 function object(value) { return value !== null && typeof value === 'object' && !Array.isArray(value) }
 function parse(text, label) {
@@ -72,14 +73,14 @@ async function discover(url, catalogFile) {
   return { rows: [...new Map(result.map(item => [item.model, item])).values()], complete }
 }
 
-export async function configure({ mode = 'install', settingsPath, url = process.env.OLLAMA_HOST || 'http://localhost:11434', catalogFile, catalog, nativeModel }) {
-  if (!['install', 'remove', 'startup'].includes(mode)) throw new Error('Use install, remove, or startup.')
+export async function configure({ mode = 'install', settingsPath, url = process.env.OLLAMA_HOST || 'http://localhost:11434', catalogFile, catalog, nativeModel, scope = 'user' }) {
+  if (!['install', 'remove', 'uninstall', 'startup'].includes(mode)) throw new Error('Use install, remove, uninstall, or startup.')
   if (mode === 'startup' && (typeof nativeModel !== 'string' || !nativeModel.trim())) throw new Error('Startup requires a native model.')
   const file = settingsPath || path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'settings.json')
   if (!path.isAbsolute(file)) throw new Error('--settings must be an absolute file path.')
   const sidecar = `${file}.ollama-model-picker.json`
   // Discover before opening any output: connection failure changes no settings.
-  const { rows: discovered, complete } = mode !== 'remove'
+  const { rows: discovered, complete } = mode === 'install' || mode === 'startup'
     ? catalog !== undefined ? catalogRows(catalog) : await discover(url, catalogFile)
     : { rows: [], complete: true }
   await fs.mkdir(path.dirname(file), { recursive: true })
@@ -87,12 +88,22 @@ export async function configure({ mode = 'install', settingsPath, url = process.
   const lock = await fs.open(lockPath, 'wx', 0o600).catch(error => { if (error.code === 'EEXIST') throw Object.assign(new Error('Another picker setup is running (or its lock remains); settings left unchanged.'), { code: 'ELOCKED' }); throw error })
   const temporary = []
   try {
-    const original = await read(file)
+    const configDir = path.dirname(file)
+    if (mode === 'install' && !await canRegisterPicker(configDir)) return { settingsPath: file, mode, count: 0 }
+    let original = await read(file)
     const prior = await read(sidecar)
-    const settings = original.text === undefined ? {} : parse(original.text, 'Settings')
-    const current = picker(settings)
+    let settings = original.text === undefined ? {} : parse(original.text, 'Settings')
+    let current = picker(settings)
     const saved = prior.text === undefined ? { version: 1, createdPicker: current === undefined, rows: [] } : parse(prior.text, 'Picker ownership record')
     if (saved.version !== 1 || typeof saved.createdPicker !== 'boolean' || !Array.isArray(saved.rows) || saved.rows.some(item => !object(item) || typeof item.model !== 'string' || typeof item.label !== 'string' || typeof item.description !== 'string')) throw new Error('Picker ownership record is malformed; left unchanged.')
+    if (mode === 'uninstall') {
+      if (await uninstallPlugin(configDir, scope)) return { settingsPath: file, mode, retained: true, count: 0 }
+      // Claude just updated enabledPlugins and pluginConfigs. Apply picker
+      // cleanup to those new settings while still holding the picker lock.
+      original = await read(file)
+      settings = original.text === undefined ? {} : parse(original.text, 'Settings')
+      current = picker(settings)
+    }
     const options = [...(current?.options || [])]
     let owned = saved.rows.filter(owned => options.some(item => isDeepStrictEqual(item, owned)))
     const previouslyPresent = [...owned]
@@ -109,13 +120,14 @@ export async function configure({ mode = 'install', settingsPath, url = process.
         options.push(item); owned.push(item); count++
       }
       if (current || options.length) settings.modelPicker = { ...current, options }
-    } else if (mode === 'remove') {
+    } else if (mode === 'remove' || mode === 'uninstall') {
       const remaining = [...options]
       for (const own of owned) {
         const index = remaining.findIndex(item => isDeepStrictEqual(item, own))
         if (index !== -1) remaining.splice(index, 1)
       }
       count = options.length - remaining.length
+      if (mode === 'uninstall' && owned.some(row => row.model === settings.model) && !remaining.some(row => row.model === settings.model)) delete settings.model
       if (current) {
         if (saved.createdPicker && remaining.length === 0 && Object.keys(current).every(key => key === 'options')) delete settings.modelPicker
         else settings.modelPicker = { ...current, options: remaining }
@@ -158,7 +170,7 @@ export async function configure({ mode = 'install', settingsPath, url = process.
       throw Object.assign(new Error('Native model entries changed during setup; retry.'), { code: 'EAGAIN' })
     }
     if (mode === 'startup' && (written.text === undefined ? undefined : parse(written.text, 'Settings').model) !== settings.model) throw Object.assign(new Error('Startup model changed during setup; retry.'), { code: 'EAGAIN' })
-    if (mode === 'remove' && prior.text !== undefined) await fs.unlink(sidecar)
+    if ((mode === 'remove' || mode === 'uninstall') && prior.text !== undefined) await fs.unlink(sidecar)
     return { settingsPath: file, mode, count }
   } finally {
     for (const temp of temporary) await fs.unlink(temp).catch(() => {})
@@ -170,6 +182,13 @@ export async function configure({ mode = 'install', settingsPath, url = process.
 async function main() {
   const args = process.argv.slice(2)
   const mode = args[0] && !args[0].startsWith('--') ? args.shift() : 'install'
+  if (mode === 'uninstall') {
+    if (args.length > 1) throw new Error('Usage: model-picker.mjs uninstall [user|project|local]')
+    const result = await configure({ mode, scope: args[0] })
+    console.log(result.retained ? 'Ollama uninstalled from this scope. Another install still uses the model picker.'
+      : `Ollama uninstalled. Removed ${result.count} Ollama model picker entries. Restart Claude Code.`)
+    return
+  }
   const options = { mode }
   for (let index = 0; index < args.length; index++) {
     if (args[index] === '--catalog-stdin') {
@@ -188,7 +207,8 @@ async function main() {
   const result = await configure(options)
   console.log(result.mode === 'startup' ? 'Native startup model preserved.' : `${result.mode === 'install' ? 'Added' : 'Removed'} ${result.count} Ollama model row(s) in ${result.settingsPath}.`)
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main().catch(error => {
+const entry = process.argv[1] && await fs.realpath(process.argv[1]).catch(() => undefined)
+if (entry && import.meta.url === pathToFileURL(entry).href) main().catch(error => {
   console.error(error.message)
   process.exitCode = ['ELOCKED', 'EAGAIN', 'EEXIST'].includes(error.code) ? 75 : 1
 })

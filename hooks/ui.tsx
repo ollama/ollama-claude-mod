@@ -1,7 +1,6 @@
 import type { EngineInterface, RenderInput } from 'claude-code'
 import type { ActivityState, Mode, OpenMenu, Thinking, ViewState } from '../types'
 import { activityElements, displayName, setPulse, shownSubagents, tokenCount } from './activity-view'
-import { gearSvg } from './icons'
 import { pickerMenu } from './menu'
 import type { Menu } from './menu'
 
@@ -69,7 +68,6 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
     ...(usage.outputTokens !== undefined ? [`${usage.outputTokens.toLocaleString('en-US')} output tokens`] : []),
   ].join(' · ')
   const visuals = activityElements($, e, state.isDark ?? false)
-  const Svg = !isTerminal && 'Svg' in els ? els.Svg : undefined
   const summaryEffort = main?.effort === 'on' || main?.effort === 'off'
     ? `Thinking ${main.effort}` : main?.effort ? effortLabels[main.effort] : undefined
   const bar = (
@@ -85,12 +83,9 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
         {!state.settingsOpen && rows.length > 0 ? <Button key="subagents-toggle" plain dimColor
           label={`${rows.length} ${rows.length === 1 ? 'subagent' : 'subagents'} ${hidden ? '▸' : '▾'}`} onPress={actions.toggleSubagents} /> : null}
         {!state.settingsOpen && state.showMode !== false ? usagePicker('compact-mode') : null}
-        {Svg ? <Box key="settings-icon" position="relative" flexShrink={0} alignItems="center" justifyContent="center" paddingX={1}>
-          <Svg source={gearSvg()} alt="Settings" width={14} height={14} />
-          <Box position="absolute" top={0} bottom={0} left={0} right={0} alignItems="center" justifyContent="center">
-            <Button key="settings" plain label="Settings" onPress={actions.toggleSettings}>{'\u00a0'.repeat(3)}</Button>
-          </Box>
-        </Box> : <Button key="settings" plain dimColor label="Settings" onPress={actions.toggleSettings}>{'\u2699\uFE0E'}</Button>}
+        <Button key="settings" plain dimColor label="Settings" onPress={actions.toggleSettings}>
+          <Text>{'⚙\uFE0E'}</Text>
+        </Button>
       </Box>
       {!state.settingsOpen && !hidden ? shown.map(row => <Box key={`subagent-${row.id}`} flexDirection="row" alignItems="center" columnGap={2} paddingLeft={1}>
         <Box flexDirection="row" alignItems="center" columnGap={1} flexGrow={1} flexShrink={1} minWidth={0}>

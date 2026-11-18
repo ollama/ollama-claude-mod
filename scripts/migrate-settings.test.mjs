@@ -5,8 +5,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { migrateSettings, pluginStoreName } from './migrate-settings.mjs'
 
-const oldId = 'ollama-chat@ollama-chat-local'
-const newId = 'ollama@ollama-local'
+const legacyId = 'ollama-chat@ollama-chat-local'
+const oldId = 'ollama@ollama-local'
+const newId = 'ollama@ollama'
 async function fixture(t) {
   const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ollama-migration-'))
   t.after(() => fs.rm(configDir, { recursive: true, force: true }))
@@ -21,8 +22,23 @@ const write = (file, value) => fs.writeFile(file, JSON.stringify(value), { mode:
 const read = async file => JSON.parse(await fs.readFile(file, 'utf8'))
 
 test('store filenames match the inspected native host identities', () => {
-  assert.equal(pluginStoreName(oldId), 'ollama-chat_ollama-chat-local-bdc75795ea72.json')
-  assert.equal(pluginStoreName(newId), 'ollama_ollama-local-cbf0159c6872.json')
+  assert.equal(pluginStoreName(legacyId), 'ollama-chat_ollama-chat-local-bdc75795ea72.json')
+  assert.equal(pluginStoreName(oldId), 'ollama_ollama-local-cbf0159c6872.json')
+  assert.equal(pluginStoreName(newId), 'ollama_ollama-24c1e3c98e66.json')
+})
+
+test('uses ollama-chat on a legacy install and ignores its stale snapshot after a previous rename', async t => {
+  for (const hasCurrentStore of [false, true]) {
+    const f = await fixture(t)
+    await write(path.join(path.dirname(f.sourceFile), pluginStoreName(legacyId)), { model: 'old', archived: true })
+    if (hasCurrentStore) await write(f.sourceFile, { model: 'current' })
+    const configs = { [legacyId]: { options: { modelCatalog: 'legacy' } } }
+    if (hasCurrentStore) configs[oldId] = { options: { modelCatalog: 'current' } }
+    await write(f.settingsFile, { pluginConfigs: configs })
+    await migrateSettings(f)
+    assert.deepEqual(await read(f.destinationFile), hasCurrentStore ? { model: 'current' } : { model: 'old', archived: true })
+    assert.deepEqual((await read(f.settingsFile)).pluginConfigs[newId], configs[hasCurrentStore ? oldId : legacyId])
+  }
 })
 
 test('copies every store value and plugin configuration without touching source or enablement', async t => {

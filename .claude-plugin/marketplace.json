@@ -1,5 +1,5 @@
 {
-  "name": "ollama-local",
+  "name": "ollama",
   "owner": {
     "name": "Ollama"
   },
@@ -9,5 +9,5 @@
       "source": "./"
     }
   ],
-  "description": "Local development of Ollama chat and subagent controls"
+  "description": "Ollama plugins for Claude Code"
 }
