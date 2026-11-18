@@ -1,0 +1,17 @@
+{
+  "name": "ollama",
+  "version": "0.1.32",
+  "description": "Use Ollama for this Claude Code chat or its native subagents",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Ollama"
+  },
+  "userConfig": {
+    "modelCatalog": {
+      "type": "string",
+      "title": "Ollama model catalog",
+      "description": "Internal catalog used to identify Ollama model selections.",
+      "default": "[]"
+    }
+  }
+}

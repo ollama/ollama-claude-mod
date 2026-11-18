@@ -1,0 +1,13 @@
+{
+  "name": "ollama-local",
+  "owner": {
+    "name": "Ollama"
+  },
+  "plugins": [
+    {
+      "name": "ollama",
+      "source": "./"
+    }
+  ],
+  "description": "Local development of Ollama chat and subagent controls"
+}
