@@ -7,8 +7,7 @@ import type { Menu } from './menu'
 export type UIState = ViewState & { activity?: ActivityState; isDark?: boolean; showMode?: boolean }
 
 export type UIActions = {
-  setEnabled: (enabled: boolean) => Promise<void>
-  setMode: (mode: Mode) => Promise<void>
+  setMode: (mode: Mode | 'never') => Promise<void>
   setModel: (model: string) => Promise<void>
   setEffort: (effort: Thinking | undefined) => Promise<void>
   toggleSettings: () => Promise<void>
@@ -24,7 +23,7 @@ const effortLabels: Record<Thinking, string> = {
 }
 
 export const modeLabels: Record<Mode, string> = { full: 'Always', subagent: 'Subagents Only' }
-const modeOptions = Object.entries(modeLabels).map(([value, label]) => ({ value, label }))
+const modeOptions = Object.entries({ never: 'Never', subagent: modeLabels.subagent, full: modeLabels.full }).map(([value, label]) => ({ value, label }))
 
 export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, state: UIState, actions: UIActions) {
   const els = $.ui.resolve(e)
@@ -46,16 +45,16 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
     : <Select key={menu.key} label={menu.label} value={menu.value} options={menu.options} onSelect={menu.onSelect} />
   const window = state.modelWindow?.model === model && state.modelWindow.endpoint === state.endpoint ? state.modelWindow : undefined
   const contextValue = window?.effective ? String(window.effective) : ''
-  const usagePicker = (key: string) => picker({ key, label: 'When to use Ollama', value: preferences.mode,
-    options: modeOptions, onSelect: value => actions.setMode(value as Mode) })
-  const native = !preferences.enabled || preferences.mode === 'subagent'
+  const usagePicker = (key: string) => picker({ key, label: 'When to use Ollama', value: preferences.enabled ? preferences.mode : 'never',
+    options: modeOptions, onSelect: value => actions.setMode(value as Mode | 'never') })
+  const target = state.selection?.current ?? (preferences.enabled && preferences.mode === 'full' ? preferences.full : '')
+  const native = !target
   // A late response belongs to its captured target. Never present it as the
   // newly selected model (especially after switching back to Claude).
-  const target = native ? '' : preferences.full
   const main = state.activity?.main?.target === target ? state.activity.main : undefined
   const isClaude = native || !!main?.model && /^(claude|opus|sonnet|haiku)/i.test(main.model)
-  const title = native ? (main?.model ? `Claude · ${displayName(main.model)}` : 'Claude') : main?.model || model ? displayName(main?.model || model) : 'Choose model'
-  const summary = `${title}${preferences.enabled ? '' : ' · Ollama Off'}${preferences.enabled && !state.connected ? ' · Not connected' : ''}`
+  const title = native ? (main?.model ? `Claude · ${displayName(main.model)}` : 'Claude') : main?.model || target ? displayName(main?.model || target) : 'Choose model'
+  const summary = `${title}${state.selection ? state.selection.status === 'pending' ? ' · Switching…' : ' · Switch failed' : preferences.enabled ? '' : ' · Ollama Off'}${preferences.enabled && !state.connected ? ' · Not connected' : ''}`
   const rows = preferences.enabled ? state.activity?.subagents ?? [] : []
   const shown = shownSubagents(rows)
   const remaining = rows.filter(row => !shown.includes(row))
@@ -121,9 +120,6 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
               <Input key="endpoint" value={state.endpoint} placeholder="http://localhost:11434" submitLabel={isTerminal ? '' : 'Save'} onSubmit={actions.setEndpoint} />
               {state.connected ? <Text key="connection-status" dimColor>Connected</Text>
                 : <Button key="refresh" plain label="Refresh" onPress={actions.refresh} />}
-            </Box>
-            <Box flexDirection="row">
-              <Button key="enabled" plain label={preferences.enabled ? 'Turn Ollama Off' : 'Turn Ollama On'} onPress={() => actions.setEnabled(!preferences.enabled)} />
             </Box>
           </Box> : null}
         </Box>

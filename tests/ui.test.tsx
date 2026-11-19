@@ -115,7 +115,7 @@ test('desktop: selecting a mode uses its model and effort, and off restores Clau
   await ui.select({ key: 'effort', value: '' })
   expect(values.get('preferences:ui-test:subagent')).toEqual({ version: 1, value: 'first' })
   expect(values.get('preferences:ui-test:subagentEffort')).toEqual({ version: 1, value: null })
-  await ui.press({ key: 'enabled' })
+  await ui.select({ key: 'mode', value: 'never' })
   expect(await ui.find({ type: 'Text', text: 'Off · Claude runs this chat and its subagents.' })).toBeUndefined()
   expect(values.get('preferences:ui-test:enabled')).toEqual({ version: 1, value: false })
   await ui.unmount()
@@ -199,7 +199,7 @@ test('a control drawn in the previous chat cannot change the resumed chat', asyn
   const current = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'resumed-chat', props })
   if (!await current.find({ key: 'settings-panel' })) await current.press({ key: 'settings' })
   if (await current.find({ key: 'model-search' })) await current.press({ key: 'model' })
-  expect((await current.find({ key: 'mode' }))?.props).toMatchObject({ value: 'subagent' })
+  expect((await current.find({ key: 'mode' }))?.props).toMatchObject({ value: 'never' })
   expect((await current.find({ key: 'model' }))?.props).toMatchObject({ label: 'Model: resumed-model (unavailable) ▾' })
   await old.unmount()
   await current.unmount()
@@ -233,7 +233,7 @@ test('a committed chat change stays visible when publishing new-chat defaults fa
   fixture.failStore('preference-defaults-v1')
   const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'partial-default-save', props })
   await ui.press({ key: 'settings' })
-  await ui.press({ key: 'enabled' })
+  await ui.select({ key: 'mode', value: 'never' })
   expect(fixture.values.get('preferences:ui-test:enabled')).toEqual({ version: 1, value: false })
   expect(fixture.values.get('preference-defaults-v1')).toEqual(defaults)
   expect(fixture.state().preferences.enabled).toBe(false)
@@ -243,28 +243,33 @@ test('a committed chat change stays visible when publishing new-chat defaults fa
 })
 
 for (const surface of ['desktop', 'terminal'] as const) {
-  test(`${surface}: settings power control shows Claude while off and preserves the saved Ollama model`, async ($, on) => {
-    const fixture = setup(on, { ...initial, connected: false })
-    const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: 'power', props })
-    expect(await ui.find({ key: 'enabled' })).toBeUndefined()
+  test(`${surface}: one usage selector enables either mode and Never preserves both choices`, async ($, on) => {
+    const fixture = setup(on, { ...initial, connected: false, preferences: { ...initial.preferences, enabled: false } })
+    const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: 'usage', props })
+    const select = async (value: string) => {
+      if (surface === 'desktop') await ui.select({ key: 'mode', value })
+      else {
+        await ui.press({ key: 'mode' })
+        await ui.press({ key: `mode-option-${value}` })
+      }
+    }
     await ui.press({ key: 'settings' })
-    expect((await ui.find({ key: 'enabled' }))?.props).toMatchObject({ label: 'Turn Ollama Off' })
-    expect((await ui.findAll({ type: 'Button' })).at(-1)?.props.label).toBe('Turn Ollama Off')
-    await ui.press({ key: 'enabled' })
+    expect(await ui.find({ key: 'enabled' })).toBeUndefined()
+    if (surface === 'desktop') expect((await ui.find({ key: 'mode' }))?.props).toMatchObject({ value: 'never', options: [
+      { value: 'never', label: 'Never' }, { value: 'subagent', label: 'Subagents Only' }, { value: 'full', label: 'Always' },
+    ] })
+    else expect((await ui.find({ key: 'mode' }))?.props.label).toBe('When to use Ollama: Never ▾')
+    await select('subagent')
+    expect(fixture.state().preferences).toMatchObject({ enabled: true, mode: 'subagent', full: 'first', subagent: 'second' })
+    await select('full')
+    expect(fixture.state().preferences).toMatchObject({ enabled: true, mode: 'full' })
+    await select('never')
+    expect(fixture.state().preferences).toEqual({ ...initial.preferences, enabled: false })
     expect(await ui.find({ type: 'Text', text: 'Claude · Ollama Off' })).toBeDefined()
-    expect((await ui.find({ key: 'enabled' }))?.props).toMatchObject({ label: 'Turn Ollama On' })
-    expect(await ui.find({ key: 'settings-panel' })).toBeDefined()
-    expect(fixture.state().preferences.full).toBe('first')
     expect(fixture.values.has('preferences:ui-test:full')).toBe(false)
-    expect((await ui.find({ key: 'model' }))?.props).toMatchObject({ label: 'Model: first ▾' })
-    await ui.press({ key: 'settings' })
-    expect(await ui.find({ key: 'enabled' })).toBeUndefined()
-    await ui.press({ key: 'settings' })
-    await ui.press({ key: 'enabled' })
-    expect((await ui.find({ key: 'enabled' }))?.props).toMatchObject({ label: 'Turn Ollama Off' })
-    expect(await ui.find({ type: 'Text', text: 'First · Not connected' })).toBeDefined()
-    expect(fixture.values.get('preferences:ui-test:enabled')).toEqual({ version: 1, value: true })
-    await ui.press({ key: 'settings' })
+    expect(fixture.values.has('preferences:ui-test:subagent')).toBe(false)
+    await select('full')
+    expect(fixture.state().preferences).toEqual(initial.preferences)
     await ui.unmount()
   })
 
@@ -306,7 +311,8 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await ui.find({ key: 'settings' })).toBeDefined()
     await ui.press({ key: 'settings' })
     expect(await ui.find({ key: 'mode' })).toBeDefined()
-    await ui.press({ key: 'enabled' })
+    if (surface === 'desktop') await ui.select({ key: 'mode', value: 'never' })
+    else { await ui.press({ key: 'mode' }); await ui.press({ key: 'mode-option-never' }) }
     await ui.press({ key: 'settings' })
     expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
     await $.prompt.submit({ text: 'Continue', wait: false, origin: { kind: surface === 'desktop' ? 'sdk' : 'composer' } })
@@ -351,6 +357,7 @@ test('a native model picker change brings the mode summary back', async ($, on) 
   fixture.http( () => ({ value: { status: 503, ok: false, headers: {}, text: '' } }))
   on('prompt.submit', (_, e) => ({ text: e.text }))
   on('classic.PostModelSwitch', () => ({}))
+  on('session.model', () => ({ value: 'second' }))
   const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'summary-model', props })
   await $.prompt.submit({ text: 'Hello', wait: false, origin: { kind: 'composer' } })
   expect(await ui.find({ key: 'compact-mode' })).toBeUndefined()
@@ -373,7 +380,7 @@ test('a setting changed while a prompt is pending stays visible when that prompt
   const submission = $.prompt.submit({ text: 'Hello', wait: false, origin: { kind: 'composer' } })
   await waiting
   await ui.press({ key: 'settings' })
-  await ui.press({ key: 'enabled' })
+  await ui.select({ key: 'mode', value: 'never' })
   await ui.press({ key: 'settings' })
   accept()
   await submission
@@ -395,7 +402,7 @@ test('terminal menus are clickable, exclusive, close on selection, and preserve 
   expect(await ui.find({ type: 'Text', text: 'First' })).toBeDefined()
   await ui.press({ key: 'model' })
   expect(await ui.find({ key: 'endpoint' })).toBeDefined()
-  expect(await ui.find({ key: 'enabled' })).toBeDefined()
+  expect(await ui.find({ key: 'enabled' })).toBeUndefined()
   await ui.press({ key: 'mode' })
   expect(await ui.find({ key: 'enabled' })).toBeUndefined()
   expect(await ui.find({ key: 'model-option-first' })).toBeUndefined()
@@ -414,8 +421,8 @@ test('terminal menus are clickable, exclusive, close on selection, and preserve 
   expect(values.get('preferences:ui-test:subagent')).toEqual({ version: 1, value: 'first' })
   expect(values.get('preferences:ui-test:subagentEffort')).toEqual({ version: 1, value: null })
   expect(await ui.find({ key: 'effort-option-' })).toBeUndefined()
-  expect((await ui.find({ key: 'enabled' }))?.props).toMatchObject({ label: 'Turn Ollama Off' })
-  await ui.press({ key: 'enabled' })
+  await ui.press({ key: 'mode' })
+  await ui.press({ key: 'mode-option-never' })
   expect(values.get('preferences:ui-test:enabled')).toEqual({ version: 1, value: false })
   await ui.unmount()
 })
@@ -519,7 +526,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await ui.find({ type: 'Text', text: '· 43.3 tok/s' })).toBeDefined()
     expect(await ui.find({ key: 'enabled' })).toBeUndefined()
     if (surface === 'desktop') {
-      expect((await ui.find({ key: 'compact-mode' }))?.props).toMatchObject({ label: 'When to use Ollama', options: [{ value: 'full', label: 'Always' }, { value: 'subagent', label: 'Subagents Only' }] })
+      expect((await ui.find({ key: 'compact-mode' }))?.props).toMatchObject({ label: 'When to use Ollama', options: [{ value: 'never', label: 'Never' }, { value: 'subagent', label: 'Subagents Only' }, { value: 'full', label: 'Always' }] })
       await ui.select({ key: 'compact-mode', value: 'subagent' })
     }
     else {
@@ -533,7 +540,8 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeDefined()
     expect(await ui.find({ key: 'summary-speed' })).toBeUndefined()
     await ui.press({ key: 'settings' })
-    await ui.press({ key: 'enabled' })
+    if (surface === 'desktop') await ui.select({ key: 'mode', value: 'never' })
+    else { await ui.press({ key: 'mode' }); await ui.press({ key: 'mode-option-never' }) }
     expect(await ui.find({ type: 'Text', text: 'Claude · Ollama Off' })).toBeDefined()
     expect(await ui.find({ key: 'summary-speed' })).toBeUndefined()
     await ui.unmount()
@@ -583,6 +591,25 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(fixture.writes).toEqual([])
     await ui.press({ key: 'settings' })
     expect(await ui.find({ key: 'subagent-running' })).toBeUndefined()
+    await ui.unmount()
+  })
+}
+
+test('/ollama off preserves explicit model choices and selecting a mode enables them again', async ($, on) => {
+  const fixture = setup(on)
+  await $.command.run({ command: 'ollama', args: 'off' } as Parameters<typeof $.command.run>[0])
+  expect(fixture.state().preferences).toEqual({ ...initial.preferences, enabled: false })
+  await $.command.run({ command: 'ollama', args: 'subagent' } as Parameters<typeof $.command.run>[0])
+  expect(fixture.state().preferences).toEqual({ ...initial.preferences, mode: 'subagent' })
+})
+
+for (const status of ['pending', 'failed'] as const) {
+  test(`${status} main switches show the actual native model, not the requested Ollama model`, async ($, on) => {
+    setup(on, { ...initial, selection: { target: 'first', current: '', status }, activity: {
+      owner: 'ui-test', hidden: false, subagents: [], main: { target: '', model: 'claude-opus-5-5', tokens: 0, running: false },
+    } })
+    const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: `switch-${status}`, props })
+    expect(await ui.find({ type: 'Text', text: `Claude · Opus 5.5 · ${status === 'pending' ? 'Switching…' : 'Switch failed'}` })).toBeDefined()
     await ui.unmount()
   })
 }

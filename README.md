@@ -27,19 +27,19 @@ node scripts/migrate-settings.mjs && \
 
 ## Get started
 
-Ollama starts off. Claude Code opens with your usual Claude model. The mod saves Kimi Pro (`kimi-k3.1-pro:cloud`) for the conversation and DeepSeek Flash (`deepseek-v4.1-flash:cloud`) for subagents.
+New installs start with **Subagents Only** enabled. Claude Code opens with your usual Claude model, and subagents use Ollama. The mod saves Kimi Pro (`kimi-k3.1-pro:cloud`) for the conversation and DeepSeek Flash (`deepseek-v4.1-flash:cloud`) for subagents.
 
 1. Run `/ollama` or open Settings above the prompt.
-2. Set **When to use Ollama** to **Always** to edit the main model or **Subagents Only** to edit the worker model.
-3. Select **Turn Ollama On**.
+2. Set **When to use Ollama** to **Always** for Ollama in the conversation and subagents, or **Subagents Only** to keep Claude in the conversation.
+3. Choose the model for the selected mode. Select **Never** whenever you want Claude for both roles.
 
 | Setting | Conversation | Subagents |
 |---|---|---|
 | **Always** | Main Ollama model | Subagent Ollama model |
 | **Subagents Only** | Claude | Subagent Ollama model |
-| **Off** | Claude | Claude |
+| **Never** | Claude | Claude |
 
-New chats inherit your last saved setup. Turning Ollama off keeps both model choices. The model picker includes local models and available Ollama cloud models. Type to search.
+New chats inherit your last saved setup. Selecting Never keeps both model choices and the previously selected mode. Existing disabled setups stay disabled. The model picker includes local models and available Ollama cloud models. Type to search.
 
 Settings also includes the model’s supported effort options, an editable context length, and the Ollama connection address.
 
@@ -49,7 +49,7 @@ Settings also includes the model’s supported effort options, an editable conte
 /ollama                   Open settings
 /ollama full MODEL        Set the main model and enable Always
 /ollama subagent MODEL    Set the worker model and enable Subagents Only
-/ollama off               Return new work to Claude
+/ollama off               Select Never; keep saved model choices
 /ollama status            Show the current setup
 ```
 

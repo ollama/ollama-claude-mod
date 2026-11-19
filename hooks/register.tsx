@@ -202,7 +202,7 @@ export const register: Register = on => {
         if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'Could not finish uninstalling Ollama. Try /ollama uninstall again.')
         return { text: result.stdout.trim(), isTextDisplayOnly: true }
       }
-      if (command === 'off') await persist($, { enabled: false })
+      if (command === 'off' || command === 'never') await persist($, { enabled: false })
       else if (command === 'full' || command === 'subagent') {
         const selected = rest.join(' ')
         await persist($, { mode: command, enabled: true, ...(selected ? { [command]: selected } : {}) })
@@ -249,8 +249,10 @@ export const register: Register = on => {
     const state = { ...current, ...(preferences ? { preferences } : {}), activity, ...appearance }
     const summary = await readSummary($, state).catch(() => undefined)
     return renderUI($, e, { ...state, showMode: summary?.visible ?? true }, {
-      setEnabled: value => change($, 'enabled', value, owner),
-      setMode: value => change($, 'mode', value, owner),
+      setMode: async value => {
+        try { await persist($, value === 'never' ? { enabled: false } : { enabled: true, mode: value }, owner) }
+        catch (error) { if (await $.session.id() === owner) await notice($, message(error)) }
+      },
       setModel: value => change($, state.preferences.mode, value, owner),
       setEffort: value => change($, state.preferences.mode === 'full' ? 'fullEffort' : 'subagentEffort', value, owner),
       toggleSettings: async () => {

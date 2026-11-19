@@ -3,8 +3,8 @@ import type { Thinking, Preferences } from '../types'
 export type { Mode, Preferences } from '../types'
 
 export const DEFAULT_PREFERENCES: Preferences = Object.freeze({
-  enabled: false,
-  mode: 'full',
+  enabled: true,
+  mode: 'subagent',
   full: 'kimi-k3.1-pro:cloud',
   subagent: 'deepseek-v4.1-flash:cloud',
 })

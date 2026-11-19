@@ -39,9 +39,9 @@ async function rejected(promise: Promise<unknown>): Promise<boolean> {
   }
 }
 
-test('a fresh chat stays native with both Ollama models ready before discovery', async () => {
+test('a fresh install enables only Ollama subagents with both models ready before discovery', async () => {
   const store = storage()
-  const expected = { enabled: false, mode: 'full', full: 'kimi-k3.1-pro:cloud', subagent: 'deepseek-v4.1-flash:cloud' }
+  const expected = { enabled: true, mode: 'subagent', full: 'kimi-k3.1-pro:cloud', subagent: 'deepseek-v4.1-flash:cloud' }
   expect(await loadPreferences(store.engine, 'fresh')).toEqual(expected)
   expect(store.values.get('preferences:fresh')).toEqual({ version: 1, value: expected })
 })
@@ -271,4 +271,13 @@ test('patch publication rereads unrelated durable edits instead of overwriting t
   const expected = { ...DEFAULT_PREFERENCES, mode: 'subagent' as const, subagent: 'worker', full: 'other-process-choice' }
   expect(await savePreferences($, 'one', { mode: 'subagent', subagent: 'worker' })).toEqual(expected)
   expect(await loadPreferences($, 'fresh')).toEqual(expected)
+})
+
+test('existing disabled chats and defaults retain their saved modes and explicit models', async () => {
+  const store = storage()
+  const disabled = { enabled: false, mode: 'full' as const, full: 'chosen-main', subagent: 'chosen-worker' }
+  store.values.set('preferences:old', { version: 1, value: disabled })
+  store.values.set('preference-defaults-v1', { version: 1, value: disabled })
+  expect(await loadPreferences(store.engine, 'old')).toEqual(disabled)
+  expect(await loadPreferences(store.engine, 'new')).toEqual(disabled)
 })
