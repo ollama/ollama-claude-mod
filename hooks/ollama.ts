@@ -6,6 +6,10 @@ import { CLOUD_CATALOG, cloudModels, isChatModel, isCloudModel, mergeModels } fr
 export type Connection = Readonly<{ base: string; key: string }>
 const CONNECTION_KEY = 'connection-v1'
 
+export class OllamaRequestError extends Error {
+  constructor(message: string, readonly status?: number) { super(message) }
+}
+
 export async function getConnection($: EngineInterface): Promise<Connection> {
   const saved = await $.store.get(CONNECTION_KEY)
   if (saved !== undefined && (typeof saved !== 'string' || !saved)) {
@@ -35,7 +39,7 @@ async function readModel($: EngineInterface, connection: Connection, name: strin
   const response = await $.http.fetch(`${connection.base}/api/show`, {
     method: 'POST', headers: headers(connection), body: JSON.stringify({ model }),
   })
-  if (!response.ok) throw new Error('Ollama could not load this model.')
+  if (!response.ok) throw new OllamaRequestError('Ollama could not load this model.', response.status)
   const shown = JSON.parse(response.text) as { capabilities?: string[]; remote_host?: string }
   if (!Array.isArray(shown.capabilities)) throw new Error('Ollama returned invalid model capabilities.')
   if (!isChatModel(shown.capabilities)) return undefined
@@ -99,7 +103,7 @@ export async function prepareRequest(
   // shows Default in that case; inference must use the same effective value.
   const supportedEffort = effort !== undefined && capabilities.efforts.includes(effort) ? effort : undefined
   // Ollama gives an explicit thinking switch precedence over named effort.
-  // Clear Claude's switch in this copy; the original remains intact for fallback.
+  // Clear Claude's switch in this copy; the original remains intact for native requests.
   const request = {
     ...body,
     thinking: undefined,

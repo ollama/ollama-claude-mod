@@ -1,7 +1,7 @@
 import type { EngineInterface, Hook, HttpInit } from 'claude-code'
 import type { Thinking } from '../types'
 import { getPreferences } from './runtime'
-import { getConnection, prepareRequest } from './ollama'
+import { getConnection, prepareRequest, OllamaRequestError } from './ollama'
 import type { Connection } from './ollama'
 import { toOllamaBody, wholeRequest, withoutUnsignedThinking } from './route'
 import { captureWindow, releaseWindow } from './window'
@@ -16,6 +16,7 @@ type Run = {
   effort?: Thinking
   nativeModel: string
   failed: boolean
+  failure?: string
   captured: boolean
   accepted: boolean
   lastRequest?: Body
@@ -31,7 +32,14 @@ const agents = new Map<string, Run>()
 const inFlight = new Map<string, Run>()
 const history = new Map<string, Body>()
 const MAIN = 'main'
-const CHOOSE_NATIVE = 'Choose a Claude model once with /model so Ollama can fall back to it.'
+const CHOOSE_NATIVE = 'Choose a Claude model with /model for native requests.'
+
+function fail($: EngineInterface, run: Pick<Run, 'model' | 'failed' | 'failure'>, phase: string, reason: string, status?: number) {
+  run.failed = true
+  run.failure = `Ollama ${phase} failed${status ? ` (HTTP ${status})` : ''}: ${reason} Change model with /model or Ollama settings, then start a new turn.`
+  try { $.ui.log(`Ollama failure: ${JSON.stringify({ model: run.model, phase, ...(status ? { status } : {}), reason })}`, { to: 'debug' }) } catch { /* Diagnostics cannot change delivery. */ }
+  return { deny: run.failure }
+}
 
 function historyKey(run: Run, loop: string): string {
   return JSON.stringify([run.sessionId, loop])
@@ -79,7 +87,6 @@ function remember($: EngineInterface, run: Run, loop: string, body: Body): void 
 async function forwardNative($: EngineInterface, run: Run, loop: string, e: Parameters<Hook<'http.fetch'>>[1], next: Parameters<Hook<'http.fetch'>>[2], body: Body) {
   // The native engine resolves aliases when starting a step; raw HTTP cannot.
   if (typeof e.init?.body === 'string' && JSON.parse(e.init.body).model === 'default') return { deny: CHOOSE_NATIVE }
-  if (run.failed) await releaseWindow($, run).catch(() => undefined)
   const result = await next(e)
   if (result.value?.ok) {
     if ((body.thread === undefined || body.thread.type === 'create') && body.system !== undefined) remember($, run, loop, { ...body, thread: undefined })
@@ -92,7 +99,7 @@ async function snapshot($: EngineInterface, nativeModel: string, worker: boolean
   const preferences = await getPreferences($)
   nativeModel = await resolveNativeModel($, nativeModel)
   // A /clear during the store read must not pair one chat's settings with
-  // another chat's history. This step stays native if the owner changed.
+  // another chat's history. Stop this step if the owner changed.
   if (sessionId !== await $.session.id()) throw new Error('Chat changed while capturing the run.')
   const enabled = preferences.enabled && (worker || preferences.mode === 'full')
   const model = enabled ? preferences[worker ? 'subagent' : 'full'] : ''
@@ -104,7 +111,7 @@ async function snapshot($: EngineInterface, nativeModel: string, worker: boolean
       if (sessionId !== await $.session.id()) throw new Error('Chat changed while capturing the connection.')
       await captureWindow($, run, run.connection, model).catch(() => undefined)
     }
-    catch { run.failed = true }
+    catch { fail($, run, 'connection', 'Check the Ollama address and sign-in.') }
   }
   return run
 }
@@ -118,7 +125,7 @@ export async function executionSpawn($: Parameters<Hook<'agent.spawn'>>[0], e: P
   // override. Explicit Agent model selections remain the native baseline.
   const parent = e.parentAgentId ? agents.get(e.parentAgentId) : inFlight.get(MAIN)
   const nativeModel = e.model ?? parent?.nativeModel ?? e.parentModel
-  const run = await snapshot($, nativeModel, true).catch(() => undefined)
+  const run = await snapshot($, nativeModel, true)
   // Agent tools dispatch after the parent step finishes, when inFlight may
   // already be empty. Never inherit an Ollama picker selection as the native
   // startup model; the worker's own steps apply its selected Ollama model.
@@ -140,7 +147,7 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
   const loop = e.agentId ?? MAIN
   let run = e.agentId ? agents.get(e.agentId) : turns.get(e.turnId)
   if (!run && !e.agentId) {
-    run = await snapshot($, e.model, false).catch(() => undefined)
+    run = await snapshot($, e.model, false)
     if (run) turns.set(e.turnId, run)
   }
   if (!run) return yield* next(e)
@@ -152,7 +159,7 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
       await rememberNativeModel($, e.model).catch(() => undefined)
     }
   }
-  const routed = Boolean(run.model && run.connection && !run.failed)
+  const routed = Boolean(run.model)
   // Native steps may select a fallback of their own. Only replace an Ollama
   // selection; Off and the native main chat must respect the host's choice.
   if (!routed && e.model !== run.nativeModel && e.model !== run.model && !await isOllamaModel($, e.model).catch(() => true)) {
@@ -176,7 +183,7 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
     delivered = true
     const ended = await activityTime($)
     if (run.accepted && !run.failed) await recordOllamaUsage($, run.sessionId, result.usage)
-    run.actualModel = result.usage?.model ?? (run.failed ? run.nativeModel : model)
+    run.actualModel = result.usage?.model ?? model
     if (run.failed && routed) run.activityEffort = undefined
     const output = result.usage?.output_tokens
     if (typeof output === 'number' && Number.isFinite(output) && output >= 0) {
@@ -189,6 +196,9 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
     if (e.agentId) await updateAgentActivity($, run.sessionId, e.agentId, row => ({ ...row, model: run.actualModel!, tokens: run.output ?? 0 }))
     else await updateMainActivity($, run.sessionId, main(true))
     return result
+  } catch (error) {
+    if (run.accepted && !run.failed) fail($, run, 'stream', 'The response was interrupted; this request cannot be replayed.')
+    throw error
   } finally {
     if (!delivered) {
       run.activityFailed = true
@@ -216,7 +226,7 @@ export async function executionComplete($: Parameters<Hook<'turn.complete'>>[0],
     } else {
       const run = turns.get(e.turnId)
       if (run) {
-        await updateMainActivity($, run.sessionId, { model: run.actualModel ?? (run.failed ? run.nativeModel : run.model || run.nativeModel), target: run.model, effort: run.activityEffort, tokens: run.output ?? 0, ...(run.duration ? { tokensPerSecond: (run.measuredOutput ?? 0) * 1000 / run.duration } : {}), running: false })
+        await updateMainActivity($, run.sessionId, { model: run.actualModel ?? (run.model || run.nativeModel), target: run.model, effort: run.activityEffort, tokens: run.output ?? 0, ...(run.duration ? { tokensPerSecond: (run.measuredOutput ?? 0) * 1000 / run.duration } : {}), running: false })
         await releaseWindow($, run).catch(() => undefined)
       }
       turns.delete(e.turnId)
@@ -272,17 +282,24 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
     } catch { /* Classification failures leave the native request unchanged. */ }
     return next(e)
   }
-  if (!run) return next(e)
   const tools = body.tools ?? []
   const continued = body.thread?.type !== undefined && body.thread.type !== 'create'
   const knownConversation = (Array.isArray(body.system) && body.system.some(block => block.text?.startsWith('x-anthropic-billing-header:'))) || (body.thread?.type === 'continue')
   // Matching the active step's chosen model AND a conversation marker prevents
   // unrelated permission classifiers, suggestions and tool-side calls routing.
   const auxiliary = tools.length > 0 && tools.every(tool => tool.input_schema === undefined)
+  if (!run) {
+    if (knownConversation && !auxiliary && body.model && await isOllamaModel($, body.model)) {
+      return fail($, { model: body.model, failed: false }, 'routing', 'The active run snapshot is unavailable. Start a new turn.')
+    }
+    return next(e)
+  }
   // The native SDK can retry inside this same step after a stream breaks.
   // Once accepted, replay could repeat output or tool calls. A new tool-loop
   // step gets a fresh marker in executionStep; auxiliary requests are separate.
-  if (run.accepted && knownConversation && !auxiliary) return { deny: 'The model response was interrupted. Start a new turn to continue.' }
+  if (run.model && knownConversation && !auxiliary && (run.accepted || run.failed)) return run.failed
+    ? { deny: run.failure! }
+    : { deny: 'The Ollama response was interrupted; this request cannot be replayed. Change model with /model or start a new turn.' }
   if (!run.model) {
     if (body.model !== run.nativeModel || auxiliary || !knownConversation) return next(e)
     const cleaned = withoutUnsignedThinking(body)
@@ -296,25 +313,24 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
     const request = cleaned ? { ...e, init: { ...e.init, body: cleaned } } : e
     return body.model === run.nativeModel && !auxiliary && knownConversation ? forwardNative($, run, loop, request, next, body) : next(request)
   }
-  let original = { ...e, init: { ...e.init, body: nativeBody(body, run.nativeModel) } }
   if (next.signal.aborted) return { deny: 'Request cancelled.' }
-  if (run.failed || !run.connection) return forwardNative($, run, loop, original, next, body)
+  if (!run.connection) return fail($, run, 'connection', 'Check the Ollama address and sign-in.')
   let whole: Body = { ...body, thread: undefined }
   if (continued) {
     let before = history.get(historyKey(run, loop))
     if (!before) {
       try { before = template(await $.store.get(templateKey(run, loop))) }
-      catch { /* Missing or unreadable cache uses the original native request. */ }
+      catch { /* Missing or unreadable templates cannot reconstruct a request. */ }
       if (next.signal.aborted) return { deny: 'Request cancelled.' }
     }
     // With no cached system/tools we cannot safely invent a full payload.
-    // Try the original native request once; its server thread may be stale.
-    if (!before) { run.failed = true; return forwardNative($, run, loop, original, next, body) }
+    // Stop before sending any inference request.
+    if (!before) return fail($, run, 'history', 'The conversation template is unavailable. Start a new conversation.')
     try {
       const transcript = await $.session.messages({ as: 'api', ...(loop !== MAIN ? { agentId: loop } : {}) })
       const lastAssistant = Array.isArray(transcript) ? transcript.findLastIndex(message => message.role === 'assistant') : -1
       if (next.signal.aborted) return { deny: 'Request cancelled.' }
-      if (lastAssistant < 0) { run.failed = true; return forwardNative($, run, loop, original, next, body) }
+      if (lastAssistant < 0) return fail($, run, 'history', 'The previous assistant response is unavailable. Start a new conversation.')
       const messages = Array.isArray(transcript) ? transcript : []
       const added = body.messages ?? []
       const hasDelta = added.length > 0 && JSON.stringify(messages.slice(-added.length)) === JSON.stringify(added)
@@ -330,26 +346,20 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
       else if (added.length > 0 && added.every(message => message.role === 'user')) {
         whole = wholeRequest({ ...before, messages: messages.slice(0, lastAssistant + 1) }, body, undefined)
       }
-      else { run.failed = true; return forwardNative($, run, loop, original, next, body) }
+      else return fail($, run, 'history', 'This continuation cannot be reconstructed safely. Start a new conversation.')
     } catch (error) {
       if (next.signal.aborted) return { deny: 'Request cancelled.' }
-      run.failed = true
-      return forwardNative($, run, loop, original, next, body)
+      return fail($, run, 'history', 'The conversation history could not be read. Start a new conversation.')
     }
   }
-  // A thread created on Ollama does not exist at Anthropic. Once rebuilt,
-  // fallback sends that full conversation without a server thread reference.
-  original = { ...e, init: { ...e.init, body: nativeBody(whole, run.nativeModel) } }
   if (whole.tools?.some(tool => tool.allowed_domains?.length || tool.blocked_domains?.length)) {
-    run.failed = true
-    return forwardNative($, run, loop, original, next, whole)
+    return fail($, run, 'request', 'Web search domain restrictions are not supported by this route.')
   }
   let request: { url: string; init: HttpInit }
   try { request = await prepareRequest($, whole, run.model, run.effort, run.connection) }
   catch (error) {
     if (next.signal.aborted) return { deny: 'Request cancelled.' }
-    run.failed = true
-    return forwardNative($, run, loop, original, next, whole)
+    return fail($, run, 'preparation', 'The model capabilities or request could not be prepared. Check the selected model.', error instanceof OllamaRequestError ? error.status : undefined)
   }
   if (next.signal.aborted) return { deny: 'Request cancelled.' }
   let response: Awaited<ReturnType<typeof next>>
@@ -358,8 +368,7 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   }
   catch (error) {
     if (next.signal.aborted) throw error
-    run.failed = true
-    return forwardNative($, run, loop, original, next, whole)
+    return fail($, run, 'transport', 'Could not reach Ollama. Check its address and sign-in.')
   }
   // Once headers were accepted, the native engine owns the stream. Do not catch
   // subsequent read failures or replay any output/tool effects.
@@ -369,6 +378,11 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
     return response
   }
   if (next.signal.aborted) return response
-  run.failed = true
-  return forwardNative($, run, loop, original, next, whole)
+  if (!response.value) {
+    // Preserve a host denial and prevent a retry from bypassing it.
+    run.failed = true
+    run.failure = response.deny ?? 'The host stopped this request. Start a new turn.'
+    return response
+  }
+  return fail($, run, 'response', 'Ollama rejected the request.', response.value.status)
 }

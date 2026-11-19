@@ -31,7 +31,7 @@ test('Agent-enabled prompts explain routing without requiring delegation or asse
   expect(result.sections[0]).toEqual(base.sections[0])
   expect(result.sections.length).toBe(2)
   const explanation = result.sections[1]!.text
-  expect(explanation.includes('native startup/fallback model')).toBe(true)
+  expect(explanation.includes('native startup model')).toBe(true)
   expect(explanation.includes('this plugin does not require delegation')).toBe(true)
   expect(await composeRoutingContext({} as EngineInterface, { ...e, tools: ['Read'] }, next)).toEqual(base)
 })

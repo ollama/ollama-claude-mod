@@ -9,9 +9,9 @@ const SECTION = {
   scope: 'session',
   text: [
     '# Ollama routing',
-    'The ollama plugin can route this conversation and native Agent subagents to Ollama. The Agent tool still lists Claude model aliases: these choose the native startup/fallback model, not necessarily the model used after plugin routing.',
-    'Use the native Agent tool normally. Omit its model argument unless a specific native fallback is wanted. Delegate when useful; this plugin does not require delegation. Do not replace native subagents with ollama run, claude -p, another CLI process, or direct API calls unless the user asks for that approach.',
-    'Existing subagents retain the settings captured when they started. The plugin handles recovery and can fall back to the native model.',
+    'The ollama plugin can route this conversation and native Agent subagents to Ollama. The Agent tool still lists Claude model aliases: these choose the native startup model, not necessarily the model used after plugin routing.',
+    'Use the native Agent tool normally. Omit its model argument unless a specific native model is wanted. Delegate when useful; this plugin does not require delegation. Do not replace native subagents with ollama run, claude -p, another CLI process, or direct API calls unless the user asks for that approach.',
+    'Existing subagents retain the settings captured when they started. Ollama failures stop the request. Change the model explicitly to continue.',
   ].join('\n\n'),
 } as const
 
@@ -25,7 +25,7 @@ async function routingNote($: EngineInterface): Promise<string> {
     const intent = preferences.mode === 'full'
       ? `Full; configured targets ${JSON.stringify(preferences.full)} for this conversation and ${worker} for native subagents`
       : `Subagents; this conversation stays native, configured target ${worker} for native subagents`
-    return `${PREFIX}${intent}. Use the native Agent tool; its model aliases select the native fallback, and omitting model inherits routing.`
+    return `${PREFIX}${intent}. Use the native Agent tool; its model aliases select the native startup model, and omitting model inherits routing.`
   } catch {
     return `${PREFIX}Current settings could not be read; do not assume an Ollama target or successful routing.`
   }

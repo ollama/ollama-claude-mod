@@ -93,30 +93,36 @@ test('interrupted responses do not count as completed requests and missing usage
   expect((await readActivity(f.engine)).ollama).toEqual({ requests: 1, inputTokens: undefined, outputTokens: undefined })
 })
 
-test('transport failure falls back once and remains native for the turn', async () => {
-  const f = fixture()
-  const next = Object.assign(async (e: FetchInput) => {
-    f.sent.push(e)
-    return e.url.startsWith('https://api.anthropic.com') ? ok : { value: { ...ok.value, status: 503, ok: false } }
-  }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
-  const thinking = { type: 'enabled', budget_tokens: 4096 }
-  const output_config = { effort: 'high' }
-  await f.step(f.id, 'claude-original', async model => {
-    const request = f.request(model)
-    await executionFetch(f.engine, { ...request, init: { ...request.init,
-      body: JSON.stringify({ ...JSON.parse(String(request.init?.body)), thinking, output_config }),
-    } }, next)
-  })
-  await f.step(f.id, 'claude-original', async model => { expect(model).toBe('claude-original') }, undefined, 1)
-  await f.step(f.id, 'claude-native-fallback', async model => { expect(model).toBe('claude-native-fallback') }, undefined, 2)
-  expect(f.sent.length).toBe(2)
-  expect(JSON.parse(String(f.sent[1]?.init?.body)).model).toBe('claude-original')
-  expect(JSON.parse(String(f.sent[0]?.init?.body)).thinking).toBeUndefined()
-  expect(JSON.parse(String(f.sent[0]?.init?.body)).output_config).toBeUndefined()
-  expect(JSON.parse(String(f.sent[1]?.init?.body)).thinking).toEqual(thinking)
-  expect(JSON.parse(String(f.sent[1]?.init?.body)).output_config).toEqual(output_config)
-  expect(f.sent[0]?.init?.headers?.authorization).toBe(undefined)
-  expect(f.sent[0]?.init?.headers?.['x-api-key']).toBe(undefined)
+test('HTTP failures stop routed requests, retain Ollama selection, and never replay on Claude', async () => {
+  for (const status of [429, 503]) {
+    const f = fixture()
+    const next = Object.assign(async (e: FetchInput) => {
+      f.sent.push(e)
+      return { value: { ...ok.value, status, ok: false, text: 'secret response body' } }
+    }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
+    await f.step(f.id, 'claude-original', async model => {
+      const result = await executionFetch(f.engine, f.request(model), next)
+      expect(result.deny?.includes(`HTTP ${status}`)).toBe(true)
+      expect(result.deny?.includes('/model')).toBe(true)
+      const retry = await executionFetch(f.engine, f.request('claude-original'), next)
+      expect(retry).toEqual(result)
+    })
+    await f.step(f.id, 'claude-original', async model => {
+      expect(model).toBe('full-model')
+      expect((await executionFetch(f.engine, f.request(model), next)).deny?.includes('/model')).toBe(true)
+    }, undefined, 1)
+    expect(f.sent.length).toBe(1)
+    expect(f.sent[0]?.url).toBe('http://127.0.0.1:11434/v1/messages')
+    expect(f.sent[0]?.init?.headers?.authorization).toBe(undefined)
+    expect(f.sent[0]?.init?.headers?.['x-api-key']).toBe(undefined)
+    // A fresh turn captures an explicit model change without inheriting failure.
+    f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, enabled: false } })
+    await f.step(`${f.id}-changed`, 'claude-new', async model => {
+      expect(model).toBe('claude-new')
+      await executionFetch(f.engine, f.request(model), f.transport)
+    })
+    expect(f.sent[1]?.url).toBe('https://api.anthropic.com/v1/messages')
+  }
 })
 
 test('aborted transport never starts a native fallback', async () => {
@@ -244,10 +250,11 @@ test('preferences are captured for the turn and a new native model is captured n
     return e.url.startsWith('https://api.anthropic.com') ? ok : { value: { ...ok.value, status: 503, ok: false } }
   }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
   await f.step(`${f.id}-new`, 'claude-new-selection', async model => { await executionFetch(f.engine, f.request(model), next) })
-  expect(JSON.parse(String(f.sent[1]?.init?.body)).model).toBe('claude-new-selection')
+  expect(f.sent.length).toBe(1)
+  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('different-model')
 })
 
-test('thread continuation without a saved beginning quietly falls back', async () => {
+test('thread continuation without a saved beginning stops before sending', async () => {
   const f = fixture()
   const agentId = `${f.id}-history-worker`
   await executionSpawn(f.engine, { model: 'claude-original', parentModel: 'claude-main', prompt: 'task', description: 'task', subagentType: 'Explore', tool_use_id: 'tool', provider: { plugin: 'engine', tier: 'core' } } as Parameters<Hook<'agent.spawn'>>[1], (async () => ({ model: 'claude-original', agentId })) as unknown as Parameters<Hook<'agent.spawn'>>[2])
@@ -258,9 +265,7 @@ test('thread continuation without a saved beginning quietly falls back', async (
     body.thread = { type: 'continue' }
     await executionFetch(f.engine, { ...request, init: { ...request.init, body: JSON.stringify(body) } }, f.transport)
   }, agentId)
-  expect(f.sent.length).toBe(1)
-  expect(f.sent[0]?.url).toBe('https://api.anthropic.com/v1/messages')
-  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('claude-original')
+  expect(f.sent.length).toBe(0)
 })
 
 test('continued requests include the prior prompt and native assistant tool reply', async () => {
@@ -287,7 +292,7 @@ test('switching off cleans unsigned Ollama thinking in the native conversation',
   expect(JSON.parse(String(f.sent[0]?.init?.body)).messages[1].content).toEqual([{ type: 'text', text: 'answer' }])
 })
 
-test('failed continuation falls back with the whole conversation and no Ollama thread', async () => {
+test('failed continuation is sent once to Ollama with the whole conversation', async () => {
   const f = fixture()
   await f.step(f.id, 'claude-original', async model => { await executionFetch(f.engine, f.request(model), f.transport) })
   const next = Object.assign(async (e: FetchInput) => {
@@ -298,10 +303,11 @@ test('failed continuation falls back with the whole conversation and no Ollama t
     const request = f.request(model)
     await executionFetch(f.engine, { ...request, init: { ...request.init, body: JSON.stringify({ model, thread: { type: 'continue' }, messages: [{ role: 'user', content: 'next' }] }) } }, next)
   }, undefined, 1)
-  const native = JSON.parse(String(f.sent[2]?.init?.body))
+  expect(f.sent.length).toBe(2)
+  const native = JSON.parse(String(f.sent[1]?.init?.body))
   expect(native.thread).toBe(undefined)
   expect(native.messages.length).toBe(3)
-  expect(native.system.length).toBe(1)
+  expect(native.system).toEqual([])
 })
 
 test('a new chat never reuses another chat main-loop system and tools', async () => {
@@ -312,13 +318,7 @@ test('a new chat never reuses another chat main-loop system and tools', async ()
     const request = second.request(model)
     await executionFetch(second.engine, { ...request, init: { ...request.init, body: JSON.stringify({ model, thread: { type: 'continue' }, messages: [{ role: 'user', content: 'new chat delta' }] }) } }, second.transport)
   })
-  expect(second.sent.length).toBe(1)
-  expect(second.sent[0]?.url).toBe('https://api.anthropic.com/v1/messages')
-  const fallback = JSON.parse(String(second.sent[0]?.init?.body))
-  expect(fallback.model).toBe('claude-second')
-  expect(fallback.system).toBe(undefined)
-  expect(fallback.tools).toBe(undefined)
-  expect(fallback.messages).toEqual([{ role: 'user', content: 'new chat delta' }])
+  expect(second.sent.length).toBe(0)
 })
 
 
@@ -408,7 +408,7 @@ test('native full requests seed only system and tools for a later Ollama run', a
   expect(f.sent[1]?.url).toBe('http://127.0.0.1:11434/v1/messages')
 })
 
-test('malformed or unavailable template storage falls back once without inventing history', async () => {
+test('malformed or unavailable template storage stops without inventing history', async () => {
   for (const broken of ['malformed', 'unavailable']) {
     const f = fixture()
     const key = `request-template-v1:${JSON.stringify([f.id, 'main'])}`
@@ -421,33 +421,31 @@ test('malformed or unavailable template storage falls back once without inventin
       const request = f.request(model)
       await executionFetch(f.engine, { ...request, init: { ...request.init, body: JSON.stringify({ model, thread: { type: 'continue' }, messages: [{ role: 'user', content: 'next' }] }) } }, f.transport)
     })
-    expect(f.sent.length).toBe(1)
-    expect(f.sent[0]?.url).toBe('https://api.anthropic.com/v1/messages')
-    expect(JSON.parse(String(f.sent[0]?.init?.body)).system).toBe(undefined)
+    expect(f.sent.length).toBe(0)
   }
 })
 
-test('a failed Ollama request seeds its exact template after native fallback succeeds', async () => {
+test('a failed Ollama request does not seed a successful template', async () => {
   const f = fixture()
   const next = Object.assign(async (e: FetchInput) => {
     f.sent.push(e)
     return e.url.startsWith('https://api.anthropic.com') ? ok : { value: { ...ok.value, status: 503, ok: false } }
   }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
   await f.step(f.id, 'claude-original', async model => { await executionFetch(f.engine, f.request(model), next) })
-  const saved = f.stored.get(`request-template-v1:${JSON.stringify([f.id, 'main'])}`) as Record<string, unknown>
-  expect(Object.keys(saved).sort()).toEqual(['system', 'tools', 'version'])
+  expect(f.stored.get(`request-template-v1:${JSON.stringify([f.id, 'main'])}`)).toBe(undefined)
+  expect(f.sent.length).toBe(1)
 })
 
 
 test('reload cache accepts realistic Desktop templates and bounds their UTF-8 bytes', async () => {
-  for (const entry of [{ text: 's'.repeat(161_875), expectedHost: 'http://127.0.0.1:11434/v1/messages' }, { text: '€'.repeat(90_000), expectedHost: 'https://api.anthropic.com/v1/messages' }]) {
+  for (const entry of [{ text: 's'.repeat(161_875), expectedHost: 'http://127.0.0.1:11434/v1/messages' }, { text: '€'.repeat(90_000), expectedHost: undefined }]) {
     const f = fixture()
     f.stored.set(`request-template-v1:${JSON.stringify([f.id, 'main'])}`, { version: 1, system: [{ type: 'text', text: entry.text }], tools: [] })
     await f.step(f.id, 'claude-original', async model => {
       const request = f.request(model)
       await executionFetch(f.engine, { ...request, init: { ...request.init, body: JSON.stringify({ model, thread: { type: 'continue' }, messages: [{ role: 'user', content: 'next' }] }) } }, f.transport)
     })
-    expect(f.sent.length).toBe(1)
+    expect(f.sent.length).toBe(entry.expectedHost ? 1 : 0)
     expect(f.sent[0]?.url).toBe(entry.expectedHost)
   }
 })
@@ -535,7 +533,7 @@ test('Off keeps native accepted-response retry behavior unchanged', async () => 
 })
 
 
-test('an Ollama native picker selection falls back to the saved native baseline on failure', async () => {
+test('an Ollama native picker selection is not replayed on its saved native baseline', async () => {
   const f = fixture()
   f.stored.set(`native-model-v1:${f.id}`, 'claude-saved')
   const next = Object.assign(async (e: FetchInput) => {
@@ -543,8 +541,8 @@ test('an Ollama native picker selection falls back to the saved native baseline 
     return e.url.startsWith('https://api.anthropic.com') ? ok : { value: { ...ok.value, status: 503, ok: false } }
   }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
   await f.step(f.id, 'full-model', async model => { await executionFetch(f.engine, f.request(model), next) })
-  expect(f.sent.length).toBe(2)
-  expect(JSON.parse(String(f.sent[1]?.init?.body)).model).toBe('claude-saved')
+  expect(f.sent.length).toBe(1)
+  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('full-model')
 })
 
 test('an explicit native worker model does not replace the owner or global native baseline', async () => {
@@ -558,7 +556,8 @@ test('an explicit native worker model does not replace the owner or global nativ
     return e.url.startsWith('https://api.anthropic.com') ? ok : { value: { ...ok.value, status: 503, ok: false } }
   }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
   await f.step(`${f.id}-worker`, 'claude-worker', async model => { await executionFetch(f.engine, f.request(model, agentId), next) }, agentId)
-  expect(JSON.parse(String(f.sent[1]?.init?.body)).model).toBe('claude-worker')
+  expect(f.sent.length).toBe(1)
+  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('worker-model')
   expect(f.stored.get(`native-model-v1:${f.id}`)).toBe('claude-main')
   expect(f.stored.get('native-model-v1:last')).toBe('claude-main')
 })
@@ -575,8 +574,9 @@ test('known auxiliary requests outside an active step restore the saved native m
   expect(f.sent.every(request => JSON.parse(String(request.init?.body)).model === 'claude-saved')).toBe(true)
   expect(f.sent[0]?.init?.headers?.authorization).toBe('native-secret')
   const unknown = f.request('full-model')
-  await executionFetch(f.engine, unknown, f.transport)
-  expect(f.sent[2]).toBe(unknown)
+  const missing = await executionFetch(f.engine, unknown, f.transport)
+  expect(missing.deny?.includes('snapshot')).toBe(true)
+  expect(f.sent.length).toBe(2)
 })
 
 test('Off restores a known auxiliary Ollama selection to the native baseline', async () => {
