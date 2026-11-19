@@ -36,8 +36,12 @@ const CHOOSE_NATIVE = 'Choose a Claude model with /model for native requests.'
 
 function fail($: EngineInterface, run: Pick<Run, 'model' | 'failed' | 'failure'>, phase: string, reason: string, status?: number) {
   run.failed = true
-  run.failure = `Ollama ${phase} failed${status ? ` (HTTP ${status})` : ''}: ${reason} Change model with /model or Ollama settings, then start a new turn.`
-  try { $.ui.log(`Ollama failure: ${JSON.stringify({ model: run.model, phase, ...(status ? { status } : {}), reason })}`, { to: 'debug' }) } catch { /* Diagnostics cannot change delivery. */ }
+  const detail = status === 429 ? 'Rate limit reached. Try again later or choose another model.'
+    : status === 401 || status === 403 ? 'Ollama authorization failed. Check sign-in.'
+    : status !== undefined && status >= 500 ? 'Ollama is unavailable. Try again later.'
+    : reason
+  run.failure = `Ollama ${phase} failed${status ? ` (HTTP ${status})` : ''}: ${detail} Change model with /model or Ollama settings, then start a new turn.`
+  try { $.ui.log(`Ollama failure: ${JSON.stringify({ model: run.model.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 200), phase, ...(status ? { status } : {}), reason: detail })}`, { to: 'debug' }) } catch { /* Diagnostics cannot change delivery. */ }
   return { deny: run.failure }
 }
 
@@ -253,7 +257,7 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   const run = inFlight.get(loop)
   let body: Body
   try { body = JSON.parse(e.init.body) }
-  catch { return next(e) }
+  catch { return run?.model ? fail($, run, 'preparation', 'The request body is invalid.') : next(e) }
   // WebSearch forwards optional empty arrays, but the API requires these
   // fields to be absent or nonempty. Keep every supplied domain restriction.
   let changed = false
@@ -284,7 +288,7 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   }
   const tools = body.tools ?? []
   const continued = body.thread?.type !== undefined && body.thread.type !== 'create'
-  const knownConversation = (Array.isArray(body.system) && body.system.some(block => block.text?.startsWith('x-anthropic-billing-header:'))) || (body.thread?.type === 'continue')
+  const knownConversation = (Array.isArray(body.system) && body.system.some(block => block.text?.startsWith('x-anthropic-billing-header:'))) || body.thread !== undefined
   // Matching the active step's chosen model AND a conversation marker prevents
   // unrelated permission classifiers, suggestions and tool-side calls routing.
   const auxiliary = tools.length > 0 && tools.every(tool => tool.input_schema === undefined)
@@ -315,6 +319,9 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   }
   if (next.signal.aborted) return { deny: 'Request cancelled.' }
   if (!run.connection) return fail($, run, 'connection', 'Check the Ollama address and sign-in.')
+  if (body.thread !== undefined && body.thread.type !== 'create' && body.thread.type !== 'continue') {
+    return fail($, run, 'history', 'This conversation continuation is not supported. Start a new conversation.')
+  }
   let whole: Body = { ...body, thread: undefined }
   if (continued) {
     let before = history.get(historyKey(run, loop))

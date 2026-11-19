@@ -735,3 +735,63 @@ test('parallel workers keep their model through tool-result and inline-system co
   expect(f.sent.every(request => request.url === 'http://127.0.0.1:11434/v1/messages')).toBe(true)
   expect(f.sent.every(request => JSON.parse(String(request.init?.body)).model === 'worker-model')).toBe(true)
 })
+
+
+test('Ollama failures log only model, phase, status and a safe reason through the host', async () => {
+  for (const phase of ['connection', 'preparation', 'transport', 'response', 'restriction'] as const) {
+    const f = fixture()
+    const logs: { text: string; options: unknown }[] = []
+    Object.assign(f.engine, { ui: { log: (text: string, options: unknown) => logs.push({ text, options }) } })
+    if (phase === 'connection') f.stored.set('connection-v1', 123)
+    if (phase === 'preparation') f.engine.http.fetch = async () => ({ status: 429, ok: false, text: 'secret server body', headers: {} })
+    const next = Object.assign(async (e: FetchInput) => {
+      f.sent.push(e)
+      if (phase === 'transport') throw new Error('secret transport token')
+      return { value: { ...ok.value, status: 429, ok: false, text: 'secret response body' } }
+    }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
+    await f.step(f.id, 'claude-original', async model => {
+      const request = f.request(model)
+      const body = JSON.parse(String(request.init?.body))
+      body.messages = [{ role: 'user', content: 'secret prompt' }]
+      if (phase === 'restriction') body.tools.push({ type: 'web_search_20250305', name: 'web_search', allowed_domains: ['private.example'] })
+      const result = await executionFetch(f.engine, { ...request, init: { ...request.init, body: JSON.stringify(body) } }, next)
+      expect(result.deny?.includes('/model')).toBe(true)
+      if (phase === 'preparation' || phase === 'response') {
+        expect(result.deny?.includes('HTTP 429')).toBe(true)
+        expect(result.deny?.includes('Rate limit')).toBe(true)
+      }
+    })
+    expect(f.sent.length).toBe(phase === 'transport' || phase === 'response' ? 1 : 0)
+    expect(logs.length).toBe(1)
+    expect(logs[0]?.options).toEqual({ to: 'debug' })
+    const diagnostic = JSON.parse(logs[0]!.text.replace('Ollama failure: ', ''))
+    expect(diagnostic.model).toBe('full-model')
+    expect(diagnostic.phase).toBe(phase === 'restriction' ? 'request' : phase)
+    if (phase === 'preparation' || phase === 'response') expect(diagnostic.status).toBe(429)
+    expect(/secret|private.example|native-key|native-secret/.test(logs[0]!.text)).toBe(false)
+  }
+})
+
+test('a host denial is preserved and cannot trigger a native or Ollama retry', async () => {
+  const f = fixture()
+  const denied = { deny: 'Stopped by the host policy.' }
+  const next = Object.assign(async (e: FetchInput) => { f.sent.push(e); return denied }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
+  await f.step(f.id, 'claude-original', async model => {
+    expect(await executionFetch(f.engine, f.request(model), next)).toBe(denied)
+    expect(await executionFetch(f.engine, f.request('claude-original'), next)).toEqual(denied)
+  })
+  expect(f.sent.length).toBe(1)
+})
+
+
+test('unsupported threaded requests and malformed bodies never leak to native inference', async () => {
+  for (const body of ['{broken', JSON.stringify({ model: 'full-model', thread: { type: 'unknown' }, messages: [{ role: 'user', content: 'next' }] })]) {
+    const f = fixture()
+    await f.step(f.id, 'claude-original', async model => {
+      const request = f.request(model)
+      const result = await executionFetch(f.engine, { ...request, init: { ...request.init, body } }, f.transport)
+      expect(result.deny?.includes('/model')).toBe(true)
+    })
+    expect(f.sent.length).toBe(0)
+  }
+})
