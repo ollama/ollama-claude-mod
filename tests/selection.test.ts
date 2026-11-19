@@ -310,3 +310,31 @@ test('worker, automatic, resume and stale main events do not cancel a queued exp
     cancelSelection()
   }
 })
+
+test('native model to Ollama then Subagents Only restores native while retaining worker settings', async () => {
+  const f = fixture(NATIVE)
+  await f.manual(FULL)
+  await modelSwitched(f.engine, { session_id: 'selection-chat', from_model: NATIVE, to_model: FULL, requested_model: FULL, source: 'command' } as ClassicHookInputs['PostModelSwitch'])
+  expect(await loadPreferences(f.engine, 'selection-chat')).toMatchObject({ enabled: true, mode: 'full', full: FULL })
+  await savePreference(f.engine, 'selection-chat', 'mode', 'subagent')
+  scheduleSelection(f.engine, 'selection-chat')
+  await f.fire()
+  expect(f.model()).toBe(NATIVE)
+  expect(await loadPreferences(f.engine, 'selection-chat')).toMatchObject({ enabled: true, mode: 'subagent', full: FULL, subagent: WORKER })
+  cancelSelection()
+})
+
+
+test('an idle automatic main switch reconciles the saved choice without publishing new preferences', async () => {
+  let post!: Hook<'classic.PostModelSwitch'>
+  register(((name: string, ...args: unknown[]) => {
+    if (name === 'classic.PostModelSwitch') post = args.at(-1) as typeof post
+  }) as unknown as Parameters<Register>[0], {} as Parameters<Register>[1])
+  const desired = { ...defaults, enabled: true }
+  const f = fixture(NATIVE, desired)
+  await post(f.engine, { session_id: 'selection-chat', from_model: FULL, to_model: NATIVE, requested_model: null, source: 'auto' } as ClassicHookInputs['PostModelSwitch'], (async () => ({})) as unknown as Parameters<Hook<'classic.PostModelSwitch'>>[2])
+  await f.fire()
+  expect(f.model()).toBe(FULL)
+  expect(await loadPreferences(f.engine, 'selection-chat')).toEqual(desired)
+  cancelSelection()
+})

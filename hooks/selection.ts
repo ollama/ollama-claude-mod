@@ -21,7 +21,8 @@ export function cancelSelection(): void {
 
 // Defer the native switch until the command/start hook returns: the host
 // refuses nested commands while either hook holds the session.
-export function scheduleSelection($: EngineInterface, owner: string): void {
+export function scheduleSelection($: EngineInterface, owner: string, ifIdle = false): void {
+  if (ifIdle && requested?.owner === owner) return
   cancelSelection()
   requested = { owner, revision }
   arm($, requested)
@@ -85,7 +86,10 @@ export async function selectModel($: EngineInterface, e: Parameters<Hook<'comman
   if (e.origin.kind !== 'plugin' || e.origin.name !== 'ollama') {
     // Opening the picker is not a new choice. Only its selected model or an
     // explicit argument supersedes an already queued switch.
-    if (e.args.trim()) cancelSelection()
+    if (e.args.trim()) {
+      cancelSelection()
+      await updateView($, state => ({ ...state, selection: undefined }))
+    }
     manualCommand = true
     try { return await next(e) }
     finally { manualCommand = false }

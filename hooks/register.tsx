@@ -142,7 +142,10 @@ export const register: Register = on => {
       await preserveNativeStartup($).catch(() => undefined)
       return result
     }
-    if (!['command', 'picker', 'sdk'].includes(e.source)) return result
+    if (!['command', 'picker', 'sdk'].includes(e.source)) {
+      scheduleSelection($, owner, true)
+      return result
+    }
     cancelSelection()
     preferenceRevision++
     try {
