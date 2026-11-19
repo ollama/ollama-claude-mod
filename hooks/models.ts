@@ -85,25 +85,28 @@ export async function preserveNativeStartup($: EngineInterface): Promise<void> {
   if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'Could not preserve the startup model.')
 }
 
+export async function isCurrentMainSwitch($: EngineInterface, e: ClassicHookInputs['PostModelSwitch']): Promise<boolean> {
+  return !e.agent_id && e.session_id === await $.session.id() && e.to_model === await $.session.model()
+}
+
 export async function modelSwitched($: EngineInterface, e: ClassicHookInputs['PostModelSwitch']): Promise<Preferences | undefined> {
-  if (e.agent_id) return undefined
+  if (!await isCurrentMainSwitch($, e)) return undefined
   const sessionId = e.session_id
-  if (sessionId !== await $.session.id()) return undefined
   const owner = await preferenceOwner($, sessionId)
   const explicit = ['command', 'picker', 'sdk'].includes(e.source)
   await rememberNativeModel($, e.from_model, explicit, sessionId)
   const selected = e.requested_model ?? e.to_model
   const ollama = await isOllamaModel($, selected) || await isOllamaModel($, e.to_model)
-  if (sessionId !== await $.session.id()) return undefined
+  if (!await isCurrentMainSwitch($, e)) return undefined
   if (!ollama) await rememberNativeModel($, e.to_model, explicit, sessionId)
   if (!explicit) return undefined
-  if (sessionId !== await $.session.id()) return undefined
+  if (!await isCurrentMainSwitch($, e)) return undefined
   if (ollama) {
     const name = await isOllamaModel($, selected) ? selected : e.to_model
-    if (sessionId !== await $.session.id()) return undefined
+    if (!await isCurrentMainSwitch($, e)) return undefined
     return savePreferences($, owner, { full: name, mode: 'full', enabled: true })
   }
   const preferences = await getPreferences($)
-  if (sessionId !== await $.session.id()) return undefined
+  if (!await isCurrentMainSwitch($, e)) return undefined
   return preferences.mode === 'full' ? savePreference($, owner, 'enabled', false) : savePreference($, owner, 'mode', preferences.mode)
 }

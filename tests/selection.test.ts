@@ -1,8 +1,11 @@
 import { expect, test } from 'claude-code/testing'
 import type { ClassicHookInputs, ClassicResult, CommandRunResult, EngineInterface, Hook } from 'claude-code'
 import { cancelSelection, confirmSelection, isOwnSelection, scheduleSelection, selectModel } from '../hooks/selection'
-import { loadPreferences } from '../hooks/settings'
+import { loadPreferences, savePreference } from '../hooks/settings'
 import type { Preferences } from '../types'
+import { register } from '../hooks/register'
+import { modelSwitched } from '../hooks/models'
+import type { Register } from 'claude-code'
 
 const NATIVE = 'claude-opus-5-5'
 const FULL = 'glm-5.3-flash:cloud'
@@ -15,7 +18,7 @@ type ConfirmNext = Parameters<Hook<'classic.PreModelSwitch'>>[2]
 // The public scheduler is fire-and-forget. Drain its finite promise work without
 // wall-clock sleeps; an unresolved native command remains deliberately queued.
 async function settle(): Promise<void> {
-  for (let index = 0; index < 150; index++) await Promise.resolve()
+  for (let index = 0; index < 500; index++) await Promise.resolve()
 }
 
 function fixture(current = FULL, preferences = defaults, throughCommandHook = false) {
@@ -83,6 +86,7 @@ function fixture(current = FULL, preferences = defaults, throughCommandHook = fa
     engine, calls, selected, ownership, confirmations,
     model: () => model,
     notice: () => state.value.notice,
+    state: () => state.value as typeof state.value & { selection?: { target: string; current: string; status: string } },
     pendingTimers: () => timers.filter(timer => !timer.cancelled).length,
     preferences: (value: Preferences) => { stored.set(`preferences:${id}`, { version: 1, value: { ...value } }) },
     move: (nextId: string) => { id = nextId; stored.set(`preferences:${id}`, { version: 1, value: { ...defaults } }) },
@@ -218,7 +222,7 @@ test('denied and nonzero native commands leave one notice without retrying', asy
     await f.fire()
     expect(f.model()).toBe(FULL)
     expect(f.calls).toEqual([NATIVE])
-    expect(f.notice()).toBe('The model switch did not finish. Choose a model with /model or try the toggle again.')
+    expect(f.notice()).toBe('The model switch did not finish. Choose a model with /model or select the use setting again to retry.')
     expect(f.pendingTimers()).toBe(0)
     cancelSelection()
   }
@@ -248,6 +252,61 @@ test('our requested switch preserves downstream asks, denials, and stops', async
     expect(f.confirmations).toEqual([result])
     expect(f.model()).toBe(FULL)
     expect(f.pendingTimers()).toBe(0)
+    cancelSelection()
+  }
+})
+
+test('failure keeps the requested settings and exposes the actual host until retry succeeds', async () => {
+  const desired = { ...defaults, enabled: true }
+  const f = fixture(NATIVE, desired)
+  f.fail('nonzero')
+  scheduleSelection(f.engine, 'selection-chat')
+  await f.fire()
+  expect(f.state().selection).toEqual({ target: FULL, current: '', status: 'failed' })
+  expect(await loadPreferences(f.engine, 'selection-chat')).toEqual(desired)
+  f.fail('ok')
+  scheduleSelection(f.engine, 'selection-chat')
+  await f.fire()
+  expect(f.model()).toBe(FULL)
+  expect(f.state().selection).toBeUndefined()
+  expect(f.notice()).toBe('')
+  cancelSelection()
+})
+
+test('editing the full model replaces a queued switch with the latest model', async () => {
+  const f = fixture(NATIVE, { ...defaults, enabled: true })
+  f.hold()
+  scheduleSelection(f.engine, 'selection-chat')
+  await f.fire()
+  f.preferences({ ...defaults, enabled: true, full: WORKER })
+  scheduleSelection(f.engine, 'selection-chat')
+  await f.release()
+  await f.fire()
+  expect(f.model()).toBe(WORKER)
+  expect(f.selected).toEqual([WORKER])
+  cancelSelection()
+})
+
+
+test('worker, automatic, resume and stale main events do not cancel a queued explicit main switch', async () => {
+  let post!: Hook<'classic.PostModelSwitch'>
+  register(((name: string, ...args: unknown[]) => {
+    if (name === 'classic.PostModelSwitch') post = args.at(-1) as typeof post
+  }) as unknown as Parameters<Register>[0], {} as Parameters<Register>[1])
+  for (const event of [
+    { agent_id: 'worker', source: 'command', to_model: NATIVE },
+    { source: 'auto', to_model: NATIVE },
+    { source: 'resume', to_model: NATIVE },
+    { source: 'picker', to_model: 'claude-sonnet-4-6' },
+  ]) {
+    const f = fixture(NATIVE, { ...defaults, enabled: true })
+    f.hold()
+    scheduleSelection(f.engine, 'selection-chat')
+    await f.fire()
+    await post(f.engine, { session_id: 'selection-chat', from_model: NATIVE, requested_model: event.to_model, ...event } as ClassicHookInputs['PostModelSwitch'], (async () => ({})) as unknown as Parameters<Hook<'classic.PostModelSwitch'>>[2])
+    await f.release()
+    expect(f.model()).toBe(FULL)
+    expect(f.ownership).toEqual([true])
     cancelSelection()
   }
 })

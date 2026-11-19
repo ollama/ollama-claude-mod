@@ -6,7 +6,7 @@ import { loadModels, syncNativePicker } from './discovery'
 import { copyChatPreferences, getPreferences, notice, preferenceOwner, readView, rememberClear, updateView } from './runtime'
 import { modeLabels, renderUI } from './ui'
 import { executionComplete, executionFetch, executionSpawn, executionStep } from './execution'
-import { modelSwitched, preserveNativeStartup, refreshModelCatalog, rememberNativeModel } from './models'
+import { isCurrentMainSwitch, modelSwitched, preserveNativeStartup, refreshModelCatalog, rememberNativeModel } from './models'
 import { cancelSelection, confirmSelection, isOwnSelection, scheduleSelection, selectModel } from './selection'
 import { refreshConfiguredWindow, resetWindows, saveModelWindow } from './window'
 import { composeRoutingContext, submitRoutingContext, refreshQueuedRoutingContext } from './context'
@@ -135,18 +135,19 @@ export const register: Register = on => {
   on('classic.PostModelSwitch', async ($, e, next) => {
     const owner = e.session_id
     const result = await next(e)
-    if (await $.session.id() !== owner) return result
+    if (!await isCurrentMainSwitch($, e)) return result
     if (isOwnSelection(e)) {
       await rememberNativeModel($, e.to_model).catch(() => undefined)
       await refreshConfiguredWindow($).catch(() => undefined)
       await preserveNativeStartup($).catch(() => undefined)
       return result
     }
+    if (!['command', 'picker', 'sdk'].includes(e.source)) return result
     cancelSelection()
     preferenceRevision++
     try {
       const preferences = await modelSwitched($, e)
-      if (preferences && await $.session.id() === owner) await updateView($, current => ({ ...current, preferences, notice: '' }))
+      if (preferences && await $.session.id() === owner) await updateView($, current => ({ ...current, preferences, selection: undefined, notice: '' }))
     } catch (error) {
       const preferences = await getPreferences($).catch(() => undefined)
       if (await $.session.id() === owner) await updateView($, current => ({ ...current, ...(preferences ? { preferences } : {}), notice: message(error) }))

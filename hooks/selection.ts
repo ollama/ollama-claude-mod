@@ -1,5 +1,5 @@
 import type { ClassicHookInputs, EngineInterface, Hook, Timer } from 'claude-code'
-import { getPreferences, notice } from './runtime'
+import { getPreferences, notice, updateView } from './runtime'
 import { isOllamaModel, rememberNativeModel, resolveNativeModel } from './models'
 import { refreshConfiguredWindow } from './window'
 
@@ -42,7 +42,14 @@ async function reconcile($: EngineInterface, request: Request): Promise<void> {
     const target = preferences.enabled && preferences.mode === 'full'
       ? preferences.full
       : await resolveNativeModel($, current)
-    if (!target || target === current || owner !== await $.session.id() || version !== revision) return
+    if (!target || owner !== await $.session.id() || version !== revision) return
+    if (target === current) {
+      await updateView($, state => ({ ...state, selection: undefined }))
+      return
+    }
+    const displayed = await isOllamaModel($, current) ? current : ''
+    if (owner !== await $.session.id() || version !== revision) return
+    await updateView($, state => ({ ...state, selection: { target, current: displayed, status: 'pending' } }))
     await rememberNativeModel($, current)
     // Native /model checks the context synchronously. Set the real window
     // first, including cached cloud metadata while the connection warms up.
@@ -54,9 +61,14 @@ async function reconcile($: EngineInterface, request: Request): Promise<void> {
     const selected = await $.session.model()
     const matches = target === 'default' ? !await isOllamaModel($, selected) : selected === target
     if (result.exitCode || !matches) throw new Error('The host did not select the requested model.')
+    await updateView($, state => ({ ...state, selection: undefined, notice: '' }))
   } catch {
     if (owner === await $.session.id() && version === revision) {
-      await notice($, 'The model switch did not finish. Choose a model with /model or try the toggle again.').catch(() => undefined)
+      const current = await $.session.model()
+      const displayed = await isOllamaModel($, current) ? current : ''
+      if (owner !== await $.session.id() || version !== revision) return
+      await updateView($, state => ({ ...state, selection: { target: state.selection?.target ?? '', current: displayed, status: 'failed' } })).catch(() => undefined)
+      await notice($, 'The model switch did not finish. Choose a model with /model or select the use setting again to retry.').catch(() => undefined)
     }
   } finally {
     active = undefined
@@ -71,7 +83,9 @@ async function reconcile($: EngineInterface, request: Request): Promise<void> {
 // skip this plugin's command hooks; PreModelSwitch also guards that native path.
 export async function selectModel($: EngineInterface, e: Parameters<Hook<'command.run'>>[1], next: Parameters<Hook<'command.run'>>[2]) {
   if (e.origin.kind !== 'plugin' || e.origin.name !== 'ollama') {
-    cancelSelection()
+    // Opening the picker is not a new choice. Only its selected model or an
+    // explicit argument supersedes an already queued switch.
+    if (e.args.trim()) cancelSelection()
     manualCommand = true
     try { return await next(e) }
     finally { manualCommand = false }

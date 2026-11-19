@@ -57,7 +57,7 @@ function forSession(current: ViewState, owner: string): ViewState {
   // Adopt an older activation's view once. A different chat always starts
   // compact, without an editor or notice left open by the previous chat.
   return { ...current, owner, ...(current.owner === undefined ? {} : {
-    settingsOpen: false, openMenu: null, notice: '', modelWindow: undefined,
+    settingsOpen: false, openMenu: null, notice: '', modelWindow: undefined, selection: undefined,
   }) }
 }
 

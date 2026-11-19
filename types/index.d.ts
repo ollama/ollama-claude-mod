@@ -33,6 +33,7 @@ export type ActivityState = { owner: string; main?: MainActivity; subagents: Sub
 export type ViewState = {
   owner?: string
   activity?: ActivityState
+  selection?: { target: string; current: string; status: 'pending' | 'failed' }
   preferences: Preferences
   models: OllamaModel[]
   connected: boolean
