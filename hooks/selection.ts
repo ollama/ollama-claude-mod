@@ -1,6 +1,7 @@
 import type { ClassicHookInputs, EngineInterface, Hook, Timer } from 'claude-code'
 import { getPreferences, notice, updateView } from './runtime'
 import { isOllamaModel, rememberNativeModel, resolveNativeModel } from './models'
+import { getConnection, showModel } from './ollama'
 import { refreshConfiguredWindow } from './window'
 
 type Selection = { owner: string; revision: number; target: string; accepted: boolean }
@@ -17,6 +18,11 @@ export function cancelSelection(): void {
   timer?.cancel()
   timer = undefined
   requested = undefined
+}
+
+export function cancelInferenceSelection($: EngineInterface): void {
+  cancelSelection()
+  void updateView($, state => state.selection?.status === 'pending' ? { ...state, selection: undefined } : state).catch(() => undefined)
 }
 
 // Defer the native switch until the command/start hook returns: the host
@@ -54,7 +60,12 @@ async function reconcile($: EngineInterface, request: Request): Promise<void> {
     await rememberNativeModel($, current)
     // Native /model checks the context synchronously. Set the real window
     // first, including cached cloud metadata while the connection warms up.
-    if (preferences.enabled && preferences.mode === 'full') await refreshConfiguredWindow($).catch(() => undefined)
+    if (preferences.enabled && preferences.mode === 'full') {
+      // A native /model command accepts unknown names and emits a success row.
+      // Do not publish that success when Ollama cannot actually use the model.
+      await showModel($, await getConnection($), target)
+      await refreshConfiguredWindow($).catch(() => undefined)
+    }
     if (owner !== await $.session.id() || version !== revision) return
     active = { owner, revision: version, target, accepted: false }
     const result = await $.command.run({ command: 'model', args: target })

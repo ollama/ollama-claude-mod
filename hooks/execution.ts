@@ -6,6 +6,7 @@ import type { Connection } from './ollama'
 import { toOllamaBody, wholeRequest, withoutUnsignedThinking } from './route'
 import { captureWindow, releaseWindow } from './window'
 import { isOllamaModel, rememberNativeModel, resolveNativeModel } from './models'
+import { cancelInferenceSelection } from './selection'
 import { activityTime, recordOllamaUsage, startAgentActivity, startMainActivity, updateAgentActivity, updateMainActivity } from './activity'
 
 type Body = Parameters<typeof toOllamaBody>[0]
@@ -148,6 +149,9 @@ export async function executionSpawn($: Parameters<Hook<'agent.spawn'>>[0], e: P
 }
 
 export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Parameters<Hook<'turn.step'>>[1], next: Parameters<Hook<'turn.step'>>[2]) {
+  // A queued native /model command produces its own host result. Cancel it
+  // before inference so that result cannot replace this turn's error/output.
+  if (!e.agentId) cancelInferenceSelection($)
   const loop = e.agentId ?? MAIN
   let run = e.agentId ? agents.get(e.agentId) : turns.get(e.turnId)
   if (!run && !e.agentId) {

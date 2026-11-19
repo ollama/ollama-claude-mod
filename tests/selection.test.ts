@@ -4,6 +4,7 @@ import { cancelSelection, confirmSelection, isOwnSelection, scheduleSelection, s
 import { loadPreferences, savePreference } from '../hooks/settings'
 import type { Preferences } from '../types'
 import { register } from '../hooks/register'
+import { executionStep } from '../hooks/execution'
 import { modelSwitched } from '../hooks/models'
 import type { Register } from 'claude-code'
 
@@ -28,6 +29,9 @@ function fixture(current = FULL, preferences = defaults, throughCommandHook = fa
   let held = false
   let outcome: 'ok' | 'denied' | 'nonzero' = 'ok'
   let preResult: ClassicResult = {}
+  let metadataWait: Promise<void> | undefined
+  let releaseMetadata: (() => void) | undefined
+  let metadataStatus = 200
   let state = { shape: 'view-v1', value: { preferences, models: [], notice: '' } }
   const timers: { cancelled: boolean; callback: () => void }[] = []
   const queued: { event: Command; resolve: (value: CommandRunResult) => void }[] = []
@@ -47,6 +51,10 @@ function fixture(current = FULL, preferences = defaults, throughCommandHook = fa
       set: async (key: string, value: unknown) => { stored.set(key, value) },
     },
     settings: { read: async () => ({}) },
+    http: { fetch: async () => {
+      await metadataWait
+      return { status: metadataStatus, ok: metadataStatus === 200, headers: {}, text: JSON.stringify({ capabilities: ['tools'] }) }
+    } },
     state: {
       get: async () => ({ value: state, version: 0 }),
       set: async (_ref: unknown, value: typeof state) => { state = value; return { isSet: true, version: 1 } },
@@ -91,6 +99,9 @@ function fixture(current = FULL, preferences = defaults, throughCommandHook = fa
     preferences: (value: Preferences) => { stored.set(`preferences:${id}`, { version: 1, value: { ...value } }) },
     move: (nextId: string) => { id = nextId; stored.set(`preferences:${id}`, { version: 1, value: { ...defaults } }) },
     hold: () => { held = true },
+    holdMetadata: () => { metadataWait = new Promise(resolve => { releaseMetadata = resolve }) },
+    releaseMetadata: () => { metadataWait = undefined; releaseMetadata?.() },
+    metadataStatus: (status: number) => { metadataStatus = status },
     fail: (value: typeof outcome) => { outcome = value },
     confirmation: (value: ClassicResult) => { preResult = value },
     fire: async () => {
@@ -336,5 +347,37 @@ test('an idle automatic main switch reconciles the saved choice without publishi
   await f.fire()
   expect(f.model()).toBe(FULL)
   expect(await loadPreferences(f.engine, 'selection-chat')).toEqual(desired)
+  cancelSelection()
+})
+
+
+test('an unavailable Ollama target never emits a synthetic successful native model command', async () => {
+  const f = fixture(NATIVE, { ...defaults, enabled: true, full: 'missing:cloud' })
+  f.metadataStatus(404)
+  scheduleSelection(f.engine, 'selection-chat')
+  await f.fire()
+  expect(f.calls).toEqual([])
+  expect(f.state().selection?.status).toBe('failed')
+  expect(f.model()).toBe(NATIVE)
+  expect(f.notice().includes('/model')).toBe(true)
+  cancelSelection()
+})
+
+test('inference cancels a startup switch awaiting metadata before it can mask the turn error', async () => {
+  const f = fixture(NATIVE, { ...defaults, enabled: true })
+  f.holdMetadata()
+  scheduleSelection(f.engine, 'selection-chat')
+  await f.fire()
+  const error = new Error('Synthetic inference failure')
+  const stream = executionStep(f.engine, { turnId: 'selection-error', index: 0, model: NATIVE, messageCount: 1 },
+    (async function* () { throw error }) as unknown as Parameters<Hook<'turn.step'>>[2])
+  const result = stream.next().catch(caught => caught)
+  await settle()
+  f.releaseMetadata()
+  expect(await result).toBe(error)
+  await settle()
+  expect(f.calls).toEqual([])
+  expect(f.model()).toBe(NATIVE)
+  expect(f.state().selection).toBeUndefined()
   cancelSelection()
 })
