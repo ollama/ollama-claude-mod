@@ -2,7 +2,12 @@ import type { EngineInterface } from 'claude-code'
 import type { Thinking, Preferences } from '../types'
 export type { Mode, Preferences } from '../types'
 
-export const DEFAULT_PREFERENCES: Preferences = Object.freeze({ enabled: false, mode: 'full', full: '', subagent: '' })
+export const DEFAULT_PREFERENCES: Preferences = Object.freeze({
+  enabled: false,
+  mode: 'full',
+  full: 'kimi-k3.1-pro:cloud',
+  subagent: 'deepseek-v4.1-flash:cloud',
+})
 
 const fields = ['enabled', 'mode', 'full', 'subagent', 'fullEffort', 'subagentEffort'] as const
 const thinking: readonly Thinking[] = ['off', 'on', 'low', 'medium', 'high', 'xhigh', 'max']
@@ -40,11 +45,20 @@ function validField(field: keyof Preferences, value: unknown): boolean {
 }
 
 function preferences(value: unknown): Preferences {
-  if (!object(value) || Object.keys(value).some(field => !fields.includes(field as keyof Preferences)) ||
-      fields.some(field => !validField(field, value[field]))) {
+  const record: Record<string, unknown> | undefined = object(value) ? { full: '', subagent: '', ...value } : undefined
+  if (!record || Object.keys(record).some(field => !fields.includes(field as keyof Preferences)) ||
+      fields.some(field => !validField(field, record[field]))) {
     throw new Error('Chat preferences are malformed; the saved values were left unchanged.')
   }
-  return { ...value } as Preferences
+  return record as Preferences
+}
+
+function blankModel(field: keyof Preferences, value: unknown): boolean {
+  return (field === 'full' || field === 'subagent') && typeof value === 'string' && !value.trim()
+}
+
+function fillModels(saved: Preferences, defaults: Preferences): Preferences {
+  return { ...saved, full: saved.full.trim() || defaults.full, subagent: saved.subagent.trim() || defaults.subagent }
 }
 
 function envelope(value: unknown): Record<string, unknown> {
@@ -68,7 +82,13 @@ async function readStored($: EngineInterface, sessionId: string): Promise<Prefer
     if (!result || !validField(field, decoded)) {
       throw new Error('Chat preferences are malformed; the saved values were left unchanged.')
     }
-    Object.assign(result, { [field]: decoded })
+    if (!blankModel(field, decoded)) Object.assign(result, { [field]: decoded })
+  }
+  if (result && (!result.full.trim() || !result.subagent.trim())) {
+    // Freeze the missing role for this chat. Explicit per-field edits still win.
+    const repaired = fillModels(result, await readDefaults($))
+    await $.store.set(base, { version: 1, value: repaired })
+    return repaired
   }
   return result
 }
@@ -76,7 +96,7 @@ async function readStored($: EngineInterface, sessionId: string): Promise<Prefer
 async function readDefaults($: EngineInterface): Promise<Preferences> {
   try {
     const saved = await $.store.get(DEFAULTS_KEY)
-    return saved === undefined ? { ...DEFAULT_PREFERENCES } : preferences(envelope(saved).value)
+    return saved === undefined ? { ...DEFAULT_PREFERENCES } : fillModels(preferences(envelope(saved).value), DEFAULT_PREFERENCES)
   } catch {
     throw new Error('Could not read saved defaults for new chats. The saved values were left unchanged.')
   }
@@ -87,7 +107,7 @@ export async function loadPreferences($: EngineInterface, sessionId: string, def
   try {
     const saved = await readStored($, sessionId)
     if (saved) return saved
-    const initial = defaults === undefined ? await readDefaults($) : preferences(defaults)
+    const initial = defaults === undefined ? await readDefaults($) : fillModels(preferences(defaults), DEFAULT_PREFERENCES)
     await $.store.set(key(sessionId), { version: 1, value: initial })
     return { ...initial }
   } finally {
@@ -105,7 +125,7 @@ export async function savePreferences($: EngineInterface, sessionId: string, pat
   }
   // Capture and validate the complete edit before waiting or writing anything.
   const edits = fields.filter(field => Object.hasOwn(patch, field)).map(field => ({ field, value: patch[field] }))
-  if (edits.some(({ field, value }) => !validField(field, value))) throw new Error('Invalid chat preference changes.')
+  if (edits.some(({ field, value }) => !validField(field, value) || blankModel(field, value))) throw new Error('Invalid chat preference changes.')
   const chatKey = key(sessionId)
   const releaseDefaults = await lock('defaults')
   const releaseChat = await lock(`chat:${chatKey}`)

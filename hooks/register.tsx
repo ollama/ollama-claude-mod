@@ -211,7 +211,11 @@ export const register: Register = on => {
         return { text: '', isTextDisplayOnly: true }
       }
       const preferences = await getPreferences($)
-      return { text: preferences.enabled ? `Ollama · ${modeLabels[preferences.mode]} · ${preferences[preferences.mode] || 'Choose a model above'}` : 'Ollama off · Claude runs this chat and its subagents.', isTextDisplayOnly: true }
+      if (!preferences.enabled) return { text: 'Ollama off · Claude runs this chat and its subagents.', isTextDisplayOnly: true }
+      const models = preferences.mode === 'full'
+        ? `Main ${preferences.full} · Subagents ${preferences.subagent}`
+        : preferences.subagent
+      return { text: `Ollama · ${modeLabels[preferences.mode]} · ${models}`, isTextDisplayOnly: true }
     } catch (error) { return { text: message(error), isTextDisplayOnly: true, exitCode: 1 } }
   })
 

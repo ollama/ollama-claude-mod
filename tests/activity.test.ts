@@ -2,13 +2,14 @@ import { expect, test } from 'claude-code/testing'
 import type { EngineInterface, Hook } from 'claude-code'
 import { readActivity, resetActivity, startAgentActivity, startMainActivity, toggleActivity, updateAgentActivity, updateMainActivity } from '../hooks/activity'
 import { executionComplete, executionSpawn, executionStep } from '../hooks/execution'
+import { DEFAULT_PREFERENCES } from '../hooks/settings'
 
 let sequence = 0
 function fixture() {
   let owner = `activity-${++sequence}`
   let time = 0
   const states = new Map<string, { value: unknown; version: number }>()
-  const preferences = { enabled: false, mode: 'full', full: '', subagent: '', fullEffort: 'high' }
+  const preferences = { ...DEFAULT_PREFERENCES, fullEffort: 'high' }
   const engine = {
     session: { id: async () => owner },
     state: {

@@ -39,6 +39,27 @@ async function rejected(promise: Promise<unknown>): Promise<boolean> {
   }
 }
 
+test('a fresh chat stays native with both Ollama models ready before discovery', async () => {
+  const store = storage()
+  const expected = { enabled: false, mode: 'full', full: 'kimi-k3.1-pro:cloud', subagent: 'deepseek-v4.1-flash:cloud' }
+  expect(await loadPreferences(store.engine, 'fresh')).toEqual(expected)
+  expect(store.values.get('preferences:fresh')).toEqual({ version: 1, value: expected })
+})
+
+test('legacy chats fill missing roles once and retain explicit choices and new-chat defaults', async () => {
+  const store = storage()
+  const prior = { enabled: true, mode: 'subagent', full: ' ', subagent: 'my-worker' }
+  store.values.set('preference-defaults-v1', { version: 1, value: prior })
+  store.values.set('preferences:old', { version: 1, value: { enabled: true, mode: 'full', full: 'my-main' } })
+  store.values.set('preferences:old:subagent', { version: 1, value: '' })
+  expect(await loadPreferences(store.engine, 'fresh')).toEqual({ ...prior, full: 'kimi-k3.1-pro:cloud' })
+  const repaired = { enabled: true, mode: 'full', full: 'my-main', subagent: 'my-worker' }
+  expect(await loadPreferences(store.engine, 'old')).toEqual(repaired)
+  await savePreference(store.engine, 'fresh', 'subagent', 'new-worker')
+  expect(await loadPreferences(store.engine, 'old')).toEqual(repaired)
+  expect((await loadPreferences(store.engine, 'next')).subagent).toBe('new-worker')
+})
+
 test('preferences capture defaults once and isolate each chat', async () => {
   const { engine: $ } = storage()
   const initial = { ...DEFAULT_PREFERENCES, full: 'first', subagentEffort: 'medium' as const }
@@ -212,6 +233,7 @@ test('invalid patches are rejected before writing any valid field', async () => 
   await loadPreferences($, 'one')
   store.writes.length = 0
   expect(await rejected(savePreferences($, 'one', {}))).toBe(true)
+  expect(await rejected(savePreferences($, 'one', { enabled: true, subagent: '  ' }))).toBe(true)
   expect(await rejected(savePreferences($, 'one', { enabled: true, mode: 'router' } as never))).toBe(true)
   expect(await rejected(savePreferences($, 'one', { enabled: true, credentials: 'invalid' } as never))).toBe(true)
   expect(store.writes).toEqual([])

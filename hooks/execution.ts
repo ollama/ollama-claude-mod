@@ -95,8 +95,8 @@ async function snapshot($: EngineInterface, nativeModel: string, worker: boolean
   // another chat's history. This step stays native if the owner changed.
   if (sessionId !== await $.session.id()) throw new Error('Chat changed while capturing the run.')
   const enabled = preferences.enabled && (worker || preferences.mode === 'full')
-  const model = enabled ? (preferences.mode === 'full' ? preferences.full : preferences.subagent) : ''
-  const effort = preferences.mode === 'full' ? preferences.fullEffort : preferences.subagentEffort
+  const model = enabled ? preferences[worker ? 'subagent' : 'full'] : ''
+  const effort = worker ? preferences.subagentEffort : preferences.fullEffort
   const run: Run = { sessionId, nativeModel, model, effort, failed: false, captured: false, accepted: false }
   if (model) {
     try {

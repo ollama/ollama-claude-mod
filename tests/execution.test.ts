@@ -153,7 +153,7 @@ for (const mode of ['full', 'subagent'] as const) {
     const start = (async () => ({ agentId, model: 'claude-native' })) as unknown as Parameters<Hook<'agent.spawn'>>[2]
     await executionSpawn(f.engine, spawn, start)
     await f.step(`${f.id}-first`, 'claude-native', async model => {
-      expect(model).toBe(f.preferences[mode])
+      expect(model).toBe('worker-model')
       await executionFetch(f.engine, f.request(model, agentId), f.transport)
     }, agentId)
     await executionComplete(f.engine, { agentId, turnId: `${f.id}-first`, answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' },
@@ -166,7 +166,7 @@ for (const mode of ['full', 'subagent'] as const) {
     }) as unknown as Parameters<Hook<'agent.spawn'>>[2])
     expect(resumed).toEqual(resume)
     await f.step(`${f.id}-resumed-turn`, 'claude-native', async model => {
-      expect(model).toBe(f.preferences[mode])
+      expect(model).toBe('worker-model')
       await executionFetch(f.engine, f.request(model, agentId), f.transport)
     }, agentId)
     expect(f.sent[1]?.url).toBe('http://127.0.0.1:11434/v1/messages')
@@ -669,10 +669,12 @@ test('returning from Full to a native model keeps prior Ollama history safe for 
   expect(body.messages[1].content).toEqual([{ type: 'text', text: 'prior answer' }])
 })
 
-test('Full routes parallel native Haiku agents to the selected Ollama model', async () => {
+test('Always sends the main request to Kimi and parallel native Haiku agents to DeepSeek', async () => {
   const f = fixture()
-  const selected = 'deepseek-v4-pro:cloud'
-  f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, full: selected } })
+  const main = 'kimi-k3.1-pro:cloud'
+  const worker = 'deepseek-v4.1-flash:cloud'
+  f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, full: main, subagent: worker } })
+  await f.step(f.id, 'claude-opus', async model => { await executionFetch(f.engine, f.request(model), f.transport) })
   const ids = [`${f.id}-haiku-a`, `${f.id}-haiku-b`]
   const spawned: string[] = []
   await Promise.all(ids.map(async agentId => {
@@ -683,12 +685,11 @@ test('Full routes parallel native Haiku agents to the selected Ollama model', as
   }))
   expect(spawned).toEqual(['haiku', 'haiku'])
   await Promise.all(ids.map(agentId => f.step(`${agentId}-turn`, 'claude-haiku-resolved', async model => {
-    expect(model).toBe(selected)
+    expect(model).toBe(worker)
     await executionFetch(f.engine, f.request(model, agentId), f.transport)
   }, agentId)))
-  expect(f.sent.length).toBe(2)
   expect(f.sent.every(request => request.url === 'http://127.0.0.1:11434/v1/messages')).toBe(true)
-  expect(f.sent.every(request => JSON.parse(String(request.init?.body)).model === selected)).toBe(true)
+  expect(f.sent.map(request => JSON.parse(String(request.init?.body)).model)).toEqual([main, worker, worker])
 })
 
 

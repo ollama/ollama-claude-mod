@@ -27,19 +27,19 @@ node scripts/migrate-settings.mjs && \
 
 ## Get started
 
-Run `/ollama` or open Settings above the prompt.
+Ollama starts off. Claude Code opens with your usual Claude model. The mod saves Kimi Pro (`kimi-k3.1-pro:cloud`) for the conversation and DeepSeek Flash (`deepseek-v4.1-flash:cloud`) for subagents.
 
-1. Choose a model.
-2. Set **When to use Ollama** to **Always** or **Subagents Only**.
+1. Run `/ollama` or open Settings above the prompt.
+2. Set **When to use Ollama** to **Always** to edit the main model or **Subagents Only** to edit the worker model.
 3. Select **Turn Ollama On**.
 
 | Setting | Conversation | Subagents |
 |---|---|---|
-| **Always** | Ollama | Ollama |
-| **Subagents Only** | Claude | Ollama |
+| **Always** | Main Ollama model | Subagent Ollama model |
+| **Subagents Only** | Claude | Subagent Ollama model |
 | **Off** | Claude | Claude |
 
-The model picker includes local models and available Ollama cloud models. Type to search.
+New chats inherit your last saved setup. Turning Ollama off keeps both model choices. The model picker includes local models and available Ollama cloud models. Type to search.
 
 Settings also includes the model’s supported effort options, an editable context length, and the Ollama connection address.
 
@@ -47,8 +47,8 @@ Settings also includes the model’s supported effort options, an editable conte
 
 ```text
 /ollama                   Open settings
-/ollama full MODEL        Use Ollama for the conversation and subagents
-/ollama subagent MODEL    Use Ollama for subagents
+/ollama full MODEL        Set the main model and enable Always
+/ollama subagent MODEL    Set the worker model and enable Subagents Only
 /ollama off               Return new work to Claude
 /ollama status            Show the current setup
 ```
