@@ -193,3 +193,23 @@ test('unexpected config list errors remain visible', async () => {
   expect(failure).toContain('Could not read configuration')
   expect(f.configs).toEqual([])
 })
+
+
+test('Desktop before first prompt preserves identity without calling its unbound config registry', async () => {
+  const f = fixture()
+  f.user({})
+  f.engine.env.get = async key => key === 'CLAUDE_CODE_ENTRYPOINT' ? 'claude-desktop' : undefined
+  let listed = 0
+  const diagnostic = '$.config.list is not available in this mode: no session is bound in this process (the REPL has not mounted and no headless session is built); catch it and carry on'
+  f.engine.config.list = async () => { listed++; throw new Error(diagnostic) }
+  f.notice(`ollama: ${diagnostic}`)
+  const remote = { ...models[0]!, name: 'desktop-cloud:cloud', isCloud: true }
+  await refreshModelCatalog(f.engine, [remote])
+  expect(listed).toBe(0)
+  expect(f.configs).toEqual([])
+  expect(f.notice()).toBe('')
+  expect(await isOllamaModel(f.engine, remote.name)).toBe(true)
+  f.notice('A different startup error')
+  await refreshModelCatalog(f.engine, [remote])
+  expect(f.notice()).toBe('A different startup error')
+})

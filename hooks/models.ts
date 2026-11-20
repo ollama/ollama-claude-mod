@@ -35,7 +35,8 @@ async function clearCatalogWarning($: EngineInterface): Promise<void> {
   const warning = (await readView($)).notice
   if (typeof warning !== 'string') return
   const original = warning.replace(/^ollama: /, '').replace(/ \(\$\.config\.list names them\)$/, '')
-  if (original !== '$.config.set: no /config row with key ollama.modelCatalog' && original !== 'no /config row with key ollama.modelCatalog') return
+  const unbound = '$.config.list is not available in this mode: no session is bound in this process (the REPL has not mounted and no headless session is built); catch it and carry on'
+  if (original !== '$.config.set: no /config row with key ollama.modelCatalog' && original !== 'no /config row with key ollama.modelCatalog' && original !== unbound) return
   await updateView($, current => current.notice === warning ? { ...current, notice: '' } : current)
 }
 
@@ -56,9 +57,12 @@ export async function refreshModelCatalog($: EngineInterface, models: OllamaMode
     return
   }
   try {
+    // Desktop may open /model before a session is bound. Its optional config
+    // registry is unavailable then and emits a host warning before rejection.
+    const desktop = await $.env.get('CLAUDE_CODE_ENTRYPOINT') === 'claude-desktop'
     // Hidden rows and rows missing from one marketplace activation are absent
     // here. Do not invoke set: the host displays its lookup error before catch.
-    if (!(await $.config.list()).some(row => row.key === CATALOG_FIELD)) {
+    if (desktop || !(await $.config.list()).some(row => row.key === CATALOG_FIELD)) {
       const saved = catalogRows(await $.store.get(CATALOG_STORE))
       if (!rows.every(row => saved.some(item => item.model === row.model))) throw new Error('Could not preserve Ollama model identity without its config row.')
       await clearCatalogWarning($)
