@@ -209,6 +209,17 @@ test('Off and Subagents Only preserve native model changes within the main turn'
   }
 })
 
+test('a conversation with a different model stops before either provider receives it', async () => {
+  const f = fixture()
+  await f.step(f.id, 'claude-original', async model => {
+    const mismatch = await executionFetch(f.engine, f.request('claude-original'), f.transport)
+    expect(mismatch.deny?.includes('did not match')).toBe(true)
+    const retry = await executionFetch(f.engine, f.request(model), f.transport)
+    expect(retry.deny).toEqual(mismatch.deny)
+  })
+  expect(f.sent).toEqual([])
+})
+
 test('classifier and internal helper requests remain native', async () => {
   const f = fixture()
   await f.step(f.id, 'claude-original', async model => {

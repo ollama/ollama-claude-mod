@@ -314,12 +314,15 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
     const request = cleaned ? { ...e, init: { ...e.init, body: cleaned } } : e
     return forwardNative($, run, loop, request, next, body)
   }
-  if (body.model !== run.model || auxiliary || !knownConversation) {
+  if (auxiliary || !knownConversation) {
     // Auxiliary calls keep their native destination. Restore an inherited
     // Ollama model name and remove unsigned thinking the native API rejects.
     const cleaned = body.model === run.model ? nativeBody(body, run.nativeModel) : withoutUnsignedThinking(body)
     const request = cleaned ? { ...e, init: { ...e.init, body: cleaned } } : e
-    return body.model === run.nativeModel && !auxiliary && knownConversation ? forwardNative($, run, loop, request, next, body) : next(request)
+    return next(request)
+  }
+  if (body.model !== run.model) {
+    return fail($, run, 'routing', 'The conversation request did not match the selected Ollama model.')
   }
   if (next.signal.aborted) return { deny: 'Request cancelled.' }
   if (!run.connection) return fail($, run, 'connection', 'Check the Ollama address and sign-in.')
