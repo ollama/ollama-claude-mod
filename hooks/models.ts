@@ -1,6 +1,6 @@
 import type { ClassicHookInputs, EngineInterface, Settings } from 'claude-code'
 import type { OllamaModel, Preferences } from '../types'
-import { getPreferences, preferenceOwner, readView } from './runtime'
+import { getPreferences, preferenceOwner, readView, updateView } from './runtime'
 import { savePreference, savePreferences } from './settings'
 import { modelRow } from './catalog'
 import type { PickerRow } from './catalog'
@@ -31,6 +31,14 @@ function catalog(settings: Settings): PickerRow[] {
   return [...new Map(rows.map(row => [row.model, row])).values()]
 }
 
+async function clearCatalogWarning($: EngineInterface): Promise<void> {
+  const warning = (await readView($)).notice
+  if (typeof warning !== 'string') return
+  const original = warning.replace(/^ollama: /, '').replace(/ \(\$\.config\.list names them\)$/, '')
+  if (original !== '$.config.set: no /config row with key ollama.modelCatalog' && original !== 'no /config row with key ollama.modelCatalog') return
+  await updateView($, current => current.notice === warning ? { ...current, notice: '' } : current)
+}
+
 // This internal catalog identifies Ollama selections. The setup script adds
 // native picker rows because the picker reads raw settings, not settings.read.
 export async function refreshModelCatalog($: EngineInterface, models: OllamaModel[], complete = true): Promise<void> {
@@ -43,15 +51,30 @@ export async function refreshModelCatalog($: EngineInterface, models: OllamaMode
   // The host may omit this optional /config row when two marketplace IDs load
   // the same plugin. Publish durable identity before attempting that registry.
   await $.store.set(CATALOG_STORE, rows)
-  if (JSON.stringify(configured) === value) return
+  if (JSON.stringify(configured) === value) {
+    await clearCatalogWarning($)
+    return
+  }
   try {
+    // Hidden rows and rows missing from one marketplace activation are absent
+    // here. Do not invoke set: the host displays its lookup error before catch.
+    if (!(await $.config.list()).some(row => row.key === CATALOG_FIELD)) {
+      const saved = catalogRows(await $.store.get(CATALOG_STORE))
+      if (!rows.every(row => saved.some(item => item.model === row.model))) throw new Error('Could not preserve Ollama model identity without its config row.')
+      await clearCatalogWarning($)
+      return
+    }
     const result = await $.config.set({ key: CATALOG_FIELD, value })
     if ('deny' in result) throw new Error(result.deny)
+    await clearCatalogWarning($)
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     if (reason.includes('no /config row with key ollama.modelCatalog')) {
       const saved = catalogRows(await $.store.get(CATALOG_STORE))
-      if (rows.every(row => saved.some(item => item.model === row.model))) return
+      if (rows.every(row => saved.some(item => item.model === row.model))) {
+        await clearCatalogWarning($)
+        return
+      }
     }
     try { $.ui.log(`Ollama model catalog: ${reason.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 500)}`, { to: 'debug' }) } catch { /* Diagnostics cannot replace the original error. */ }
     throw error

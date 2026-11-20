@@ -13,17 +13,18 @@ function fixture(preferences: Preferences = { ...DEFAULT_PREFERENCES, full: 'loc
   let id = 'model-chat'
   let current = 'claude-opus-4-8'
   let user = config()
+  let state = { shape: 'view-v1', value: { models, notice: '' } }
   const values = new Map<string, unknown>([['preferences:model-chat', { version: 1, value: preferences }]])
   const configs: unknown[] = []
   const engine = {
     session: { id: async () => id, model: async () => current },
     env: { get: async () => undefined },
     store: { get: async (key: string) => values.get(key), set: async (key: string, value: unknown) => { values.set(key, value) } },
-    state: { get: async () => ({ value: { shape: 'view-v1', value: { models } }, version: 0 }) },
+    state: { get: async () => ({ value: state, version: 0 }), set: async (_: unknown, value: typeof state) => { state = value; return { isSet: true, version: 1 } } },
     settings: { read: async (args?: { source?: string }) => !args?.source || args.source === 'user' ? user : {} },
-    config: { set: async (args: { key: string; value: string }) => { configs.push(args); user = config(JSON.parse(args.value)); return { value: args.value } } },
+    config: { list: async () => [{ key: 'ollama.modelCatalog' }], set: async (args: { key: string; value: string }) => { configs.push(args); user = config(JSON.parse(args.value)); return { value: args.value } } },
   } as unknown as EngineInterface
-  return { engine, values, configs, select: (model: string) => { current = model }, move: (next: string) => { id = next }, user: (settings: Settings) => { user = settings } }
+  return { engine, values, configs, notice: (value?: string) => value === undefined ? state.value.notice : state.value.notice = value, select: (model: string) => { current = model }, move: (next: string) => { id = next }, user: (settings: Settings) => { user = settings } }
 }
 async function apply(f: ReturnType<typeof fixture>, e: ClassicHookInputs['PostModelSwitch']) {
   f.select(e.to_model)
@@ -123,11 +124,12 @@ test('a delayed main event cannot replace a newer native choice', async () => {
 test('a missing optional host config row retains durable identity across reloads', async () => {
   const f = fixture()
   f.user({})
-  f.engine.config.set = async () => { throw new Error('$.config.set: no /config row with key ollama.modelCatalog') }
+  f.engine.config.list = async () => []
   const remote = { ...models[0]!, name: 'new-cloud:cloud', isCloud: true }
   await refreshModelCatalog(f.engine, [remote])
   expect(await isOllamaModel(f.engine, remote.name)).toBe(true)
   expect(f.values.get('model-catalog-v1')).toMatchObject([{ model: remote.name }])
+  expect(f.configs).toEqual([])
   await refreshModelCatalog(f.engine, [{ ...remote, name: 'second:cloud' }], false)
   expect(await isOllamaModel(f.engine, remote.name)).toBe(true)
 })
@@ -157,10 +159,37 @@ test('a missing host row is not ignored without equivalent durable identity', as
   const f = fixture()
   f.user({})
   f.engine.store.set = async () => undefined
-  f.engine.config.set = async () => { throw new Error('$.config.set: no /config row with key ollama.modelCatalog') }
+  f.engine.config.list = async () => []
   let failure = ''
   try { await refreshModelCatalog(f.engine, [{ ...models[0]!, name: 'not-saved:cloud' }]) }
   catch (error) { failure = String(error) }
-  expect(failure).toContain('no /config row')
+  expect(failure).toContain('Could not preserve Ollama model identity')
+  expect(f.configs).toEqual([])
   expect(await isOllamaModel(f.engine, 'not-saved:cloud')).toBe(false)
+})
+
+
+test('recovered catalog clears only its obsolete missing-row warning', async () => {
+  const f = fixture()
+  f.user({})
+  f.engine.config.list = async () => []
+  const remote = { ...models[0]!, name: 'new-cloud:cloud', isCloud: true }
+  f.notice('ollama: $.config.set: no /config row with key ollama.modelCatalog ($.config.list names them)')
+  await refreshModelCatalog(f.engine, [remote])
+  expect(f.notice()).toBe('')
+  f.notice('Ollama request failed. Choose another model and try again.')
+  await refreshModelCatalog(f.engine, [remote])
+  expect(f.notice()).toBe('Ollama request failed. Choose another model and try again.')
+  expect(f.configs).toEqual([])
+})
+
+test('unexpected config list errors remain visible', async () => {
+  const f = fixture()
+  f.user({})
+  f.engine.config.list = async () => { throw new Error('Could not read configuration') }
+  let failure = ''
+  try { await refreshModelCatalog(f.engine, models) }
+  catch (error) { failure = String(error) }
+  expect(failure).toContain('Could not read configuration')
+  expect(f.configs).toEqual([])
 })

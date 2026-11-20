@@ -33,6 +33,7 @@ function setup(on: On, initialState = initial) {
   })
   on('session.id', () => ({ value: sessionId }))
   on('env.get', () => ({ value: undefined }))
+  on('config.list', () => ({ value: [{ key: 'ollama.modelCatalog', label: 'Model catalog', kind: 'text' as const, value: '[]', provider: { plugin: 'ollama', tier: 'user' as const }, isLocked: false }] }))
   on('state.get', async (_, e, next) => {
     const result = await next(e)
     if (e.key === 'activity' && state.activity) return { value: { value: { shape: 'activity-v1', value: state.activity }, version: result.value?.version ?? 0 } }
