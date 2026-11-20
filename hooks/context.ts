@@ -10,8 +10,7 @@ const SECTION = {
   text: [
     '# Ollama routing',
     'The ollama plugin can route this conversation and native Agent subagents to Ollama. The Agent tool still lists Claude model aliases: these choose the native startup model, not necessarily the model used after plugin routing.',
-    'Use the native Agent tool normally. Omit its model argument unless a specific native model is wanted. Delegate when useful; this plugin does not require delegation. Do not replace native subagents with ollama run, claude -p, another CLI process, or direct API calls unless the user asks for that approach.',
-    'Existing subagents retain the settings captured when they started. Ollama failures stop the request. Change the model explicitly to continue.',
+    'Use the native Agent tool normally. Omit its model argument unless a specific native model is wanted.',
   ].join('\n\n'),
 } as const
 
@@ -20,7 +19,7 @@ async function routingNote($: EngineInterface): Promise<string> {
     const owner = await $.session.id()
     const preferences = await getPreferences($)
     if (owner !== await $.session.id()) return `${PREFIX}Settings changed with the chat; the current target is not confirmed.`
-    if (!preferences.enabled) return `${PREFIX}Off for new work; use native Claude Code models. Existing subagents may retain earlier settings.`
+    if (!preferences.enabled) return `${PREFIX}Off for new work; use native Claude Code models.`
     const worker = JSON.stringify(preferences.subagent)
     const intent = preferences.mode === 'full'
       ? `Full; configured targets ${JSON.stringify(preferences.full)} for this conversation and ${worker} for native subagents`

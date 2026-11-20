@@ -23,7 +23,7 @@ async function submit(engine: EngineInterface) {
   return captured
 }
 
-test('Agent-enabled prompts explain routing without requiring delegation or asserting the actual model', async () => {
+test('Agent-enabled prompts explain model aliases and how to inherit the configured route', async () => {
   const base = { sections: [{ id: 'base', text: 'Original system instructions', scope: 'shared' as const }] }
   const e: Parameters<Hook<'prompt.compose'>>[1] = { model: 'claude-opus', promptModel: 'claude-opus', surfaces: [], tools: ['Agent'], outputStyle: null, traits: [] }
   const next = (async () => base) as unknown as Parameters<Hook<'prompt.compose'>>[2]
@@ -32,7 +32,7 @@ test('Agent-enabled prompts explain routing without requiring delegation or asse
   expect(result.sections.length).toBe(2)
   const explanation = result.sections[1]!.text
   expect(explanation.includes('native startup model')).toBe(true)
-  expect(explanation.includes('this plugin does not require delegation')).toBe(true)
+  expect(explanation.split('\n\n').slice(2)).toEqual(['Use the native Agent tool normally. Omit its model argument unless a specific native model is wanted.'])
   expect(await composeRoutingContext({} as EngineInterface, { ...e, tools: ['Read'] }, next)).toEqual(base)
 })
 
@@ -44,7 +44,7 @@ test('each submitted prompt carries configured routing while preserving text and
   expect(full.context?.[1]).toContain('"configured-model" for this conversation')
   expect(full.context?.[1]).toContain('"worker-model" for native subagents')
   f.set({ enabled: false, mode: 'full', full: 'configured-model', subagent: 'worker-model' })
-  expect((await submit(f.engine)).context?.[1]?.includes('Off for new work')).toBe(true)
+  expect((await submit(f.engine)).context?.[1]).toBe('ollama routing: Off for new work; use native Claude Code models.')
   f.fail()
   expect((await submit(f.engine)).context?.[1]?.includes('Current settings could not be read')).toBe(true)
 })
