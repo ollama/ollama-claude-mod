@@ -4,50 +4,72 @@ import { getPreferences, preferenceOwner, readView } from './runtime'
 import { savePreference, savePreferences } from './settings'
 import { modelRow } from './catalog'
 import type { PickerRow } from './catalog'
+import { readCachedModels } from './discovery'
+import { getConnection } from './ollama'
 
 const CATALOG_FIELD = 'ollama.modelCatalog'
+const CATALOG_STORE = 'model-catalog-v1'
 const NATIVE_GLOBAL = 'native-model-v1:last'
 
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function catalogRows(value: unknown): PickerRow[] {
+  return Array.isArray(value) ? value.filter((row): row is PickerRow => object(row) && typeof row.model === 'string' && row.model.trim() !== '' && typeof row.label === 'string' && typeof row.description === 'string') : []
+}
+
 function catalog(settings: Settings): PickerRow[] {
   if (!object(settings.pluginConfigs)) return []
+  const rows: PickerRow[] = []
   for (const [name, config] of Object.entries(settings.pluginConfigs)) {
     if (name !== 'ollama' && !name.startsWith('ollama@')) continue
     if (!object(config) || !object(config.options) || typeof config.options.modelCatalog !== 'string') continue
-    try {
-      const rows: unknown = JSON.parse(config.options.modelCatalog)
-      if (Array.isArray(rows)) return rows.filter((row): row is PickerRow => object(row) && typeof row.model === 'string' && row.model.trim() !== '' && typeof row.label === 'string' && typeof row.description === 'string')
-    } catch { /* A damaged internal catalog adds no rows. */ }
+    try { rows.push(...catalogRows(JSON.parse(config.options.modelCatalog))) }
+    catch { /* A damaged internal catalog adds no rows. */ }
   }
-  return []
+  return [...new Map(rows.map(row => [row.model, row])).values()]
 }
 
 // This internal catalog identifies Ollama selections. The setup script adds
 // native picker rows because the picker reads raw settings, not settings.read.
 export async function refreshModelCatalog($: EngineInterface, models: OllamaModel[], complete = true): Promise<void> {
-  const previous = catalog(await $.settings.read({ source: 'user' }))
+  const configured = catalog(await $.settings.read({ source: 'user' }))
+  const previous = [...catalogRows(await $.store.get(CATALOG_STORE)), ...configured]
   const incoming = models.filter(model => !model.isDecision).map(modelRow)
   const rows = [...new Map([...(complete ? [] : previous), ...incoming].map(row => [row.model, row])).values()]
     .sort((a, b) => a.model.localeCompare(b.model))
   const value = JSON.stringify(rows)
-  if (JSON.stringify(previous) === value) return
-  const result = await $.config.set({ key: CATALOG_FIELD, value })
-  if ('deny' in result) throw new Error(result.deny)
+  // The host may omit this optional /config row when two marketplace IDs load
+  // the same plugin. Publish durable identity before attempting that registry.
+  await $.store.set(CATALOG_STORE, rows)
+  if (JSON.stringify(configured) === value) return
+  try {
+    const result = await $.config.set({ key: CATALOG_FIELD, value })
+    if ('deny' in result) throw new Error(result.deny)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    if (reason.includes('no /config row with key ollama.modelCatalog')) {
+      const saved = catalogRows(await $.store.get(CATALOG_STORE))
+      if (rows.every(row => saved.some(item => item.model === row.model))) return
+    }
+    try { $.ui.log(`Ollama model catalog: ${reason.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 500)}`, { to: 'debug' }) } catch { /* Diagnostics cannot replace the original error. */ }
+    throw error
+  }
 }
 
 export async function isOllamaModel($: EngineInterface, candidate: string): Promise<boolean> {
   if (!candidate) return false
   const preferences = await getPreferences($)
   if (candidate === preferences.full || candidate === preferences.subagent) return true
+  if (catalogRows(await $.store.get(CATALOG_STORE)).some(row => row.model === candidate)) return true
   const state = await readView($)
   if (state.models.some(model => !model.isDecision && model.name === candidate)) return true
   for (const source of ['policy', 'flag', 'user'] as const) {
     if (catalog(await $.settings.read({ source })).some(row => row.model === candidate)) return true
   }
-  return false
+  try { return (await readCachedModels($, await getConnection($))).some(model => model.name === candidate) }
+  catch { return false } // Optional cached identity must not break native routing.
 }
 
 // Keep the actual native model separately from the picker selection. A model

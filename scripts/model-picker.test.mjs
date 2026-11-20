@@ -50,7 +50,7 @@ test('refresh removes stale owned rows and removal preserves user edits', async 
   await configure(f)
   await fs.writeFile(f.catalogFile, JSON.stringify([{ name: 'next-model', isCloud: true, isDecision: false }]))
   await configure(f)
-  assert.deepEqual((await f.read()).modelPicker.options, [{ model: 'next-model', label: 'Ollama · next-model', description: 'Ollama Cloud' }])
+  assert.deepEqual((await f.read()).modelPicker.options, [{ model: 'next-model', label: 'Ollama · next-model · Cloud', description: 'Ollama Cloud' }])
   const edited = await f.read()
   edited.modelPicker.options[0].label = 'My renamed model'
   edited.modelPicker.options.push({ model: 'custom', label: 'Keep' })
@@ -64,9 +64,9 @@ test('partial refresh adds new rows without deleting previously discovered model
   await configure(f)
   const models = [{ name: 'new-model', isCloud: true, isDecision: false }]
   await configure({ ...f, catalog: { models, complete: false } })
-  assert.deepEqual((await f.read()).modelPicker.options.map(row => row.model), ['custom', 'test-model', 'new-model'])
+  assert.deepEqual((await f.read()).modelPicker.options.map(row => row.model), ['custom', 'new-model', 'test-model'])
   await configure({ ...f, catalog: { models: [], complete: false } })
-  assert.deepEqual((await f.read()).modelPicker.options.map(row => row.model), ['custom', 'test-model', 'new-model'])
+  assert.deepEqual((await f.read()).modelPicker.options.map(row => row.model), ['custom', 'new-model', 'test-model'])
   await configure({ ...f, catalog: { models, complete: true } })
   assert.deepEqual((await f.read()).modelPicker.options.map(row => row.model), ['custom', 'new-model'])
   assert.equal((await f.read()).model, 'opus')
@@ -182,7 +182,26 @@ test('live discovery merges the public cloud catalog with tool-capable local mod
   const f = await fixture(t, {})
   await configure({ settingsPath: f.settingsPath, url: `127.0.0.1:${server.address().port}` })
   assert.deepEqual((await f.read()).modelPicker.options, [
-    { model: 'cloud-model:cloud', label: 'Ollama · cloud-model:cloud', description: 'Ollama Cloud' },
+    { model: 'cloud-model:cloud', label: 'Ollama · cloud-model · Cloud', description: 'Ollama Cloud' },
     { model: 'tools', label: 'Ollama · tools', description: 'Local Ollama' },
   ])
+})
+
+
+test('friendly owned rows migrate while custom labels and native positions remain intact', async t => {
+  const old = { model: 'kimi-k3.1-pro:cloud', label: 'Ollama · kimi-k3.1-pro:cloud', description: 'Ollama Cloud' }
+  const custom = { model: 'glm-5.3:latest-cloud', label: 'My worker' }
+  const native = { model: 'opus', label: 'Claude Opus' }
+  const f = await fixture(t, { model: custom.model, modelPicker: { options: [native, old, custom] } })
+  await fs.writeFile(`${f.settingsPath}.ollama-model-picker.json`, JSON.stringify({ version: 1, createdPicker: false, rows: [old] }))
+  const names = ['glm-5.3:cloud', 'glm-5.3:latest-cloud', 'kimi-k3.1-pro:cloud', 'deepseek-v4.1-flash:cloud', 'kimi-k3.1:cloud', 'glm-5.3:q4']
+  await configure({ ...f, catalog: { models: names.map(name => ({ name, isCloud: name.endsWith('cloud'), isDecision: false })), complete: true } })
+  const settings = await f.read()
+  assert.deepEqual(settings.modelPicker.options[0], native)
+  assert.deepEqual(settings.modelPicker.options[2], custom)
+  assert.deepEqual(settings.modelPicker.options[1], { ...old, label: 'Ollama · Kimi K3.1 Pro · Cloud' })
+  assert.equal(settings.model, custom.model)
+  assert.deepEqual(settings.modelPicker.options.map(row => row.model), ['opus', 'kimi-k3.1-pro:cloud', 'glm-5.3:latest-cloud', 'deepseek-v4.1-flash:cloud', 'glm-5.3:q4', 'kimi-k3.1:cloud'])
+  await configure({ ...f, mode: 'remove' })
+  assert.deepEqual((await f.read()).modelPicker.options, [native, custom])
 })

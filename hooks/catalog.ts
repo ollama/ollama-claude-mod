@@ -12,8 +12,47 @@ export function isCloudModel(name: string, remoteHost?: string): boolean {
   return Boolean(remoteHost) || /[:-]cloud$/.test(name)
 }
 
+// Bare names and :latest identify the same Ollama tag. No other suffix is
+// removed: versions, sizes, quantizations and local/cloud are distinct models.
+export function canonicalModel(name: string): string {
+  return name.replace(/:latest-cloud$/, ':cloud').replace(/:latest$/, '')
+}
+
+export function modelLabel(model: Pick<OllamaModel, 'name' | 'isCloud'>): string {
+  const name = model.name.replace(/(?::cloud|-cloud)$/, '').replace(/:latest$/, '')
+  const label = name.replace(/^kimi-k(\d[\w.-]*)$/i, (_, version: string) => `Kimi K${version.replace(/-pro$/, ' Pro')}`)
+    .replace(/^deepseek-v(\d[\w.-]*)$/i, (_, version: string) => `DeepSeek V${version.replace(/-flash$/, ' Flash')}`)
+    .replace(/^glm-(\d[\w.-]*)$/i, (_, version: string) => `GLM ${version.replace(/-flash$/, ' Flash')}`)
+  return `${label}${model.isCloud ? ' · Cloud' : ''}`
+}
+
+function recommendation(name: string): number {
+  const canonical = canonicalModel(name)
+  if (canonical === 'kimi-k3.1-pro:cloud') return 0
+  if (canonical === 'deepseek-v4.1-flash:cloud') return 1
+  return 2
+}
+
+export function compareModels(a: { name: string }, b: { name: string }): number {
+  return recommendation(a.name) - recommendation(b.name) || a.name.localeCompare(b.name)
+}
+
+export function modelChoices<T extends Pick<OllamaModel, 'name' | 'isCloud' | 'isDecision'>>(models: T[], selected?: string | readonly string[]): T[] {
+  const selectedNames = new Set(typeof selected === 'string' ? [selected] : selected)
+  const groups = new Map<string, T[]>()
+  for (const model of models) {
+    if (model.isDecision) continue
+    const key = `${model.isCloud}:${canonicalModel(model.name)}`
+    groups.set(key, [...(groups.get(key) ?? []), model])
+  }
+  return [...groups.values()].flatMap(group => {
+    const retained = group.filter(model => selectedNames.has(model.name))
+    return retained.length ? retained : [group.reduce((a, b) => a.name.length <= b.name.length ? a : b)]
+  }).sort(compareModels)
+}
+
 export function modelRow(model: Pick<OllamaModel, 'name' | 'isCloud'>): PickerRow {
-  return { model: model.name, label: `Ollama · ${model.name}`, description: model.isCloud ? 'Ollama Cloud' : 'Local Ollama' }
+  return { model: model.name, label: `Ollama · ${modelLabel(model)}`, description: model.isCloud ? 'Ollama Cloud' : 'Local Ollama' }
 }
 
 export function cloudModels(text: string): OllamaModel[] {

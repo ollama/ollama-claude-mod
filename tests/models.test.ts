@@ -119,3 +119,48 @@ test('a delayed main event cannot replace a newer native choice', async () => {
   expect((await loadPreferences(f.engine, 'model-chat')).enabled).toBe(DEFAULT_PREFERENCES.enabled)
   expect(f.values.has('preference-defaults-v1')).toBe(false)
 })
+
+test('a missing optional host config row retains durable identity across reloads', async () => {
+  const f = fixture()
+  f.user({})
+  f.engine.config.set = async () => { throw new Error('$.config.set: no /config row with key ollama.modelCatalog') }
+  const remote = { ...models[0]!, name: 'new-cloud:cloud', isCloud: true }
+  await refreshModelCatalog(f.engine, [remote])
+  expect(await isOllamaModel(f.engine, remote.name)).toBe(true)
+  expect(f.values.get('model-catalog-v1')).toMatchObject([{ model: remote.name }])
+  await refreshModelCatalog(f.engine, [{ ...remote, name: 'second:cloud' }], false)
+  expect(await isOllamaModel(f.engine, remote.name)).toBe(true)
+})
+
+test('catalog registration failures remain visible and discovery cache identifies native picker rows', async () => {
+  const f = fixture()
+  f.user({})
+  f.engine.config.set = async () => { throw new Error('Configuration is read-only') }
+  let failure = ''
+  try { await refreshModelCatalog(f.engine, [{ ...models[0]!, name: 'new-cloud:cloud' }]) }
+  catch (error) { failure = String(error) }
+  expect(failure).toContain('Configuration is read-only')
+  f.values.set(`model-discovery-v1:${encodeURIComponent('http://127.0.0.1:11434')}`, [{ ...models[0]!, name: 'cached:cloud', isCloud: true }])
+  expect(await isOllamaModel(f.engine, 'cached:cloud')).toBe(true)
+})
+
+test('catalog identity aggregates multiple marketplace install IDs', async () => {
+  const f = fixture()
+  f.user({ pluginConfigs: {
+    'ollama@first': { options: { modelCatalog: '[]' } },
+    'ollama@second': { options: { modelCatalog: JSON.stringify([{ ...rows[0]!, model: 'second-catalog:cloud' }]) } },
+  } })
+  expect(await isOllamaModel(f.engine, 'second-catalog:cloud')).toBe(true)
+})
+
+test('a missing host row is not ignored without equivalent durable identity', async () => {
+  const f = fixture()
+  f.user({})
+  f.engine.store.set = async () => undefined
+  f.engine.config.set = async () => { throw new Error('$.config.set: no /config row with key ollama.modelCatalog') }
+  let failure = ''
+  try { await refreshModelCatalog(f.engine, [{ ...models[0]!, name: 'not-saved:cloud' }]) }
+  catch (error) { failure = String(error) }
+  expect(failure).toContain('no /config row')
+  expect(await isOllamaModel(f.engine, 'not-saved:cloud')).toBe(false)
+})

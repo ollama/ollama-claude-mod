@@ -5,7 +5,7 @@ import os from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { pathToFileURL } from 'node:url'
-import { CLOUD_CATALOG, cloudModels, isChatModel, isCloudModel, modelRow } from '../hooks/catalog.ts'
+import { CLOUD_CATALOG, cloudModels, isChatModel, isCloudModel, modelRow, modelChoices, compareModels } from '../hooks/catalog.ts'
 import { connectionAddress } from '../hooks/route.ts'
 import { canRegisterPicker, uninstallPlugin } from './plugin-installation.mjs'
 
@@ -109,15 +109,31 @@ export async function configure({ mode = 'install', settingsPath, url = process.
     const previouslyPresent = [...owned]
     let count = 0
     if (mode === 'install') {
-      const names = new Set(discovered.map(item => item.model))
+      // User-authored or edited native rows retain their exact IDs, even when
+      // the catalog also advertises a shorter canonical alias.
+      const protectedNames = options.filter(item => !owned.some(own => isDeepStrictEqual(item, own))).map(item => item.model)
+      if (typeof settings.model === 'string') protectedNames.push(settings.model)
+      const choices = modelChoices(discovered.map(row => ({ name: row.model, isCloud: row.description === 'Ollama Cloud', isDecision: false, row })), protectedNames).map(item => item.row)
+      const names = new Set(choices.map(item => item.model))
       for (const stale of owned.filter(item => complete && !names.has(item.model))) {
         const index = options.findIndex(item => isDeepStrictEqual(item, stale))
         if (index !== -1) options.splice(index, 1)
       }
       owned = owned.filter(item => !complete || names.has(item.model))
-      for (const item of discovered.sort((a, b) => a.model.localeCompare(b.model))) {
+      for (const item of choices) {
+        const previous = owned.find(row => row.model === item.model)
+        if (previous) {
+          const index = options.findIndex(row => isDeepStrictEqual(row, previous))
+          if (index !== -1) options[index] = item
+          owned = owned.map(row => row === previous ? item : row)
+        }
         if (options.some(existing => existing.model === item.model)) continue
         options.push(item); owned.push(item); count++
+      }
+      const ordered = [...choices, ...owned].filter((row, index, rows) => rows.findIndex(item => item.model === row.model) === index && owned.some(item => isDeepStrictEqual(item, row))).sort((a, b) => compareModels({ name: a.model }, { name: b.model }))
+      let next = 0
+      for (let index = 0; index < options.length; index++) {
+        if (owned.some(row => isDeepStrictEqual(row, options[index]))) options[index] = ordered[next++]
       }
       if (current || options.length) settings.modelPicker = { ...current, options }
     } else if (mode === 'remove' || mode === 'uninstall') {
