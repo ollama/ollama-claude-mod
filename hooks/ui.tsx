@@ -63,7 +63,8 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
   const main = state.activity?.main?.target === target ? state.activity.main : undefined
   const isClaude = native || !!main?.model && /^(claude|opus|sonnet|haiku)/i.test(main.model)
   const title = native ? (main?.model ? displayName(main.model) : 'Claude') : main?.model || target ? displayName(main?.model || target) : 'Choose model'
-  const summary = `${title}${state.selection ? state.selection.status === 'pending' ? ' · Switching…' : ' · Switch failed' : ''}${preferences.enabled && !state.connected ? ' · Not connected' : ''}`
+  const summary = `${title}${state.selection ? state.selection.status === 'pending' ? ' · Switching…' : ' · Switch failed' : ''}`
+  const notice = state.notice || (preferences.enabled || state.settingsOpen ? state.connectionIssue : undefined)
   const rows = preferences.enabled ? state.activity?.subagents ?? [] : []
   const hidden = state.activity?.hidden ?? false
   const showRows = !hidden && !state.settingsOpen
@@ -96,7 +97,7 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
         {state.selection?.status === 'failed' ? <Button key="retry-switch" plain label="Retry" onPress={() => actions.setMode(preferences.enabled ? preferences.mode : 'never')} /> : null}
         <Button key="settings" plain dimColor label={state.settingsOpen ? 'Done' : 'Settings'} onPress={actions.toggleSettings} />
       </Box>
-      {state.notice ? <Text key="notice">{state.notice}</Text> : null}
+      {notice ? <Text key="notice">{notice}</Text> : null}
       {shown.map(row => <Box key={`subagent-${row.id}`} flexDirection="row" alignItems="center" columnGap={2} paddingLeft={1}>
         <Box flexDirection="row" alignItems="center" columnGap={1} flexGrow={1} flexShrink={1} minWidth={0}>
           <Text dimColor>↳</Text>

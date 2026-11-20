@@ -1,7 +1,7 @@
 import type { ClassicHookInputs, EngineInterface, Hook, Timer } from 'claude-code'
-import { getPreferences, notice, updateView } from './runtime'
+import { getPreferences, updateView } from './runtime'
 import { isOllamaModel, rememberNativeModel, resolveNativeModel } from './models'
-import { getConnection, showModel } from './ollama'
+import { getConnection, OllamaConnectionError, showModel } from './ollama'
 import { refreshConfiguredWindow } from './window'
 
 type Selection = { owner: string; revision: number; target: string; accepted: boolean }
@@ -74,13 +74,19 @@ async function reconcile($: EngineInterface, request: Request): Promise<void> {
     const matches = target === 'default' ? !await isOllamaModel($, selected) : selected === target
     if (result.exitCode || !matches) throw new Error('The host did not select the requested model.')
     await updateView($, state => ({ ...state, selection: undefined, notice: '' }))
-  } catch {
+  } catch (error) {
     if (owner === await $.session.id() && version === revision) {
       const current = await $.session.model()
       const displayed = await isOllamaModel($, current) ? current : ''
       if (owner !== await $.session.id() || version !== revision) return
-      await updateView($, state => ({ ...state, selection: { target: state.selection?.target ?? '', current: displayed, status: 'failed' } })).catch(() => undefined)
-      await notice($, 'The model switch did not finish. Choose a model with /model or select the use setting again to retry.').catch(() => undefined)
+      await updateView($, state => {
+        const selection = { target: state.selection?.target ?? '', current: displayed, status: 'failed' as const }
+        if (error instanceof OllamaConnectionError) {
+          if (state.endpoint && state.endpoint !== error.endpoint) return { ...state, selection }
+          return { ...state, selection, connected: false, connectionIssue: error.message, notice: '' }
+        }
+        return { ...state, selection, notice: 'The model switch did not finish. Choose a model with /model or select the use setting again to retry.' }
+      }).catch(() => undefined)
     }
   } finally {
     active = undefined

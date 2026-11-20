@@ -1,7 +1,8 @@
 import type { EngineInterface, Hook } from 'claude-code'
 import type { Thinking } from '../types'
 import { getPreferences, readView, updateView } from './runtime'
-import { getConnection, prepareRequest, OllamaRequestError } from './ollama'
+import { getConnection, prepareRequest, OllamaConnectionError, OllamaRequestError } from './ollama'
+import { invalidateStaleConnection } from './discovery'
 import type { Connection } from './ollama'
 import { toOllamaBody, wholeRequest, withoutUnsignedThinking } from './route'
 import { captureWindow, releaseWindow } from './window'
@@ -20,6 +21,7 @@ type Run = {
   failure?: string
   noticeRevision?: number
   previousNotice?: string
+  previousConnectionIssue?: string
   worker?: boolean
   captured: boolean
   accepted: boolean
@@ -38,6 +40,7 @@ const history = new Map<string, Body>()
 const noticeRevisions = new Map<string, number>()
 const MAIN = 'main'
 const CHOOSE_NATIVE = 'Choose a Claude model with /model for native requests.'
+const INVALID_CONNECTION = 'Could not read the Ollama connection settings. Check the address in Settings → Advanced.'
 
 async function fail($: EngineInterface, run: Pick<Run, 'model' | 'failed' | 'failure'> & Partial<Run>, phase: string, reason: string, status?: number) {
   const firstFailure = !run.failed
@@ -46,8 +49,10 @@ async function fail($: EngineInterface, run: Pick<Run, 'model' | 'failed' | 'fai
     : status === 401 || status === 403 ? 'Ollama authorization failed. Check sign-in.'
     : status !== undefined && status >= 500 ? 'Ollama is unavailable. Try again later.'
     : reason
-  run.failure = `Ollama ${phase} failed${status ? ` (HTTP ${status})` : ''}: ${detail} Change model with /model or Ollama settings, then start a new turn.`
+  run.failure = phase === 'connection' ? detail
+    : `Ollama ${phase} failed${status ? ` (HTTP ${status})` : ''}: ${detail} Change model with /model or Ollama settings, then start a new turn.`
   const model = run.model.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 200)
+  if (phase === 'connection' && run.connection) invalidateStaleConnection(run.connection.base, false)
   try { $.ui.log(`Ollama failure: ${JSON.stringify({ model, phase, ...(status ? { status } : {}), reason: detail })}`, { to: 'debug' }) } catch { /* Diagnostics cannot change delivery. */ }
   if (firstFailure && run.sessionId && run.noticeRevision !== undefined) {
     const owner = run.sessionId
@@ -57,11 +62,17 @@ async function fail($: EngineInterface, run: Pick<Run, 'model' | 'failed' | 'fai
       const preferences = await getPreferences($)
       if (owner === await $.session.id() && (noticeRevisions.get(owner) ?? 0) === run.noticeRevision &&
           preferences.enabled && (run.worker || preferences.mode === 'full') && preferences[role] === run.model && preferences[effort] === run.effort) {
-        await updateView($, current => current.owner === owner && (noticeRevisions.get(owner) ?? 0) === run.noticeRevision &&
-          current.notice === run.previousNotice && current.preferences.enabled &&
-          (run.worker || current.preferences.mode === 'full') && current.preferences[role] === run.model && current.preferences[effort] === run.effort && current.selection?.status !== 'pending'
-          ? { ...current, notice: `Ollama ${model} · ${phase}${status ? ` · HTTP ${status}` : ''}: ${detail} Change model with /model or Ollama settings.` }
-          : current)
+        await updateView($, current => {
+          if (current.owner !== owner || (noticeRevisions.get(owner) ?? 0) !== run.noticeRevision ||
+              current.notice !== run.previousNotice || !current.preferences.enabled || (!run.worker && current.preferences.mode !== 'full') ||
+              current.preferences[role] !== run.model || current.preferences[effort] !== run.effort || current.selection?.status === 'pending') return current
+          if (phase === 'connection') {
+            if (!run.connection) return { ...current, notice: detail }
+            if (current.endpoint && current.endpoint !== run.connection.base) return current
+            return { ...current, connected: false, connectionIssue: detail, notice: '' }
+          }
+          return { ...current, notice: `Ollama ${model} · ${phase}${status ? ` · HTTP ${status}` : ''}: ${detail} Change model with /model or Ollama settings.` }
+        })
       }
     } catch { /* A notice must not replace or hide the original request failure. */ }
   }
@@ -131,15 +142,16 @@ async function snapshot($: EngineInterface, nativeModel: string, worker: boolean
   const enabled = preferences.enabled && (worker || preferences.mode === 'full')
   const model = enabled ? preferences[worker ? 'subagent' : 'full'] : ''
   const effort = worker ? preferences.subagentEffort : preferences.fullEffort
-  const previousNotice = (await readView($).catch(() => undefined))?.notice
-  const run: Run = { sessionId, nativeModel, model, effort, failed: false, captured: false, accepted: false, worker, previousNotice, noticeRevision: noticeRevisions.get(sessionId) ?? 0 }
+  const view = await readView($).catch(() => undefined)
+  const run: Run = { sessionId, nativeModel, model, effort, failed: false, captured: false, accepted: false, worker, previousNotice: view?.notice,
+    previousConnectionIssue: view?.connectionIssue, noticeRevision: noticeRevisions.get(sessionId) ?? 0 }
   if (model) {
     try {
       run.connection = { ...await getConnection($) }
       if (sessionId !== await $.session.id()) throw new Error('Chat changed while capturing the connection.')
       await captureWindow($, run, run.connection, model).catch(() => undefined)
     }
-    catch { await fail($, run, 'connection', 'Check the Ollama address and sign-in.') }
+    catch { await fail($, run, 'connection', INVALID_CONNECTION) }
   }
   return run
 }
@@ -366,7 +378,7 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
     return fail($, run, 'routing', 'The conversation request did not match the selected Ollama model.')
   }
   if (next.signal.aborted) return { deny: 'Request cancelled.' }
-  if (!run.connection) return fail($, run, 'connection', 'Check the Ollama address and sign-in.')
+  if (!run.connection) return fail($, run, 'connection', INVALID_CONNECTION)
   if (body.thread !== undefined && body.thread.type !== 'create' && body.thread.type !== 'continue') {
     return fail($, run, 'history', 'This conversation continuation is not supported. Start a new conversation.')
   }
@@ -414,6 +426,7 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   try { request = await prepareRequest($, whole, run.model, run.effort, run.connection) }
   catch (error) {
     if (next.signal.aborted) return { deny: 'Request cancelled.' }
+    if (error instanceof OllamaConnectionError) return fail($, run, 'connection', error.message)
     return fail($, run, 'preparation', 'The model capabilities or request could not be prepared. Check the selected model.', error instanceof OllamaRequestError ? error.status : undefined)
   }
   if (next.signal.aborted) return { deny: 'Request cancelled.' }
@@ -424,12 +437,19 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   }
   catch (error) {
     if (next.signal.aborted) throw error
-    return fail($, run, 'transport', 'Could not reach Ollama. Check its address and sign-in.')
+    return fail($, run, 'connection', new OllamaConnectionError(run.connection.base).message)
   }
   // Once headers were accepted, the native engine owns the stream. Do not catch
   // subsequent read failures or replay any output/tool effects.
   if (response.value?.ok) {
     run.accepted = true
+    if (run.previousConnectionIssue && run.previousConnectionIssue === new OllamaConnectionError(run.connection.base).message) {
+      const base = run.connection.base
+      invalidateStaleConnection(base, true)
+      await updateView($, state => state.owner === run.sessionId && state.endpoint === base && state.connectionIssue === run.previousConnectionIssue
+        ? { ...state, connected: true, connectionIssue: undefined } : state).catch(() => undefined)
+      run.previousConnectionIssue = undefined
+    }
     remember($, run, loop, whole)
     return response
   }

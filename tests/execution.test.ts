@@ -806,7 +806,8 @@ test('Ollama failures log only model, phase, status and a safe reason through th
       body.messages = [{ role: 'user', content: 'secret prompt' }]
       if (phase === 'restriction') body.tools.push({ type: 'web_search_20250305', name: 'web_search', allowed_domains: ['private.example'] })
       const result = await executionFetch(f.engine, { ...request, init: { ...request.init, body: JSON.stringify(body) } }, next)
-      expect(result.deny?.includes('/model')).toBe(true)
+      if (phase === 'connection' || phase === 'transport') expect(result.deny).toContain('Settings → Advanced')
+      else expect(result.deny).toContain('/model')
       if (phase === 'preparation' || phase === 'response') {
         expect(result.deny?.includes('HTTP 429')).toBe(true)
         expect(result.deny?.includes('Rate limit')).toBe(true)
@@ -817,10 +818,49 @@ test('Ollama failures log only model, phase, status and a safe reason through th
     expect(logs[0]?.options).toEqual({ to: 'debug' })
     const diagnostic = JSON.parse(logs[0]!.text.replace('Ollama failure: ', ''))
     expect(diagnostic.model).toBe('full-model')
-    expect(diagnostic.phase).toBe(phase === 'restriction' ? 'request' : phase)
+    expect(diagnostic.phase).toBe(phase === 'restriction' ? 'request' : phase === 'transport' ? 'connection' : phase)
     if (phase === 'preparation' || phase === 'response') expect(diagnostic.status).toBe(429)
     expect(/secret|private.example|native-key|native-secret/.test(logs[0]!.text)).toBe(false)
   }
+})
+
+test('a disconnected subagent stops at the saved address while the native main chat can continue', async () => {
+  const f = fixture('subagent', true)
+  f.stored.set('connection-v1', 'http://127.0.0.1:49172')
+  f.engine.http.fetch = async () => { throw new Error('unreachable') }
+  const agentId = `${f.id}-worker`
+  await executionSpawn(f.engine, { parentModel: 'claude-native', prompt: 'Work', description: 'Work', subagentType: 'Explore' } as Parameters<Hook<'agent.spawn'>>[1],
+    (async () => ({ agentId, model: 'claude-native' })) as unknown as Parameters<Hook<'agent.spawn'>>[2])
+  await f.step(agentId, 'claude-native', async model => {
+    const failure = await executionFetch(f.engine, f.request(model, agentId), f.transport)
+    expect(failure.deny).toContain("Can't reach Ollama at 127.0.0.1:49172")
+    expect(failure.deny).toContain('Settings → Advanced')
+    expect(await executionFetch(f.engine, f.request('claude-native', agentId), f.transport)).toEqual(failure)
+  }, agentId)
+  expect(f.sent).toHaveLength(0)
+  await f.step(`${f.id}-main`, 'claude-native', async model => {
+    expect(await executionFetch(f.engine, f.request(model), f.transport)).toBe(ok)
+  })
+  expect(f.sent.map(request => request.url)).toEqual(['https://api.anthropic.com/v1/messages'])
+})
+
+test('a retry after Ollama restarts clears its connection warning and keeps other notices', async () => {
+  const f = fixture('full', true)
+  await updateView(f.engine, state => ({ ...state, endpoint: 'http://127.0.0.1:11434' }))
+  const online = f.engine.http.fetch
+  f.engine.http.fetch = async () => { throw new Error('Connection refused') }
+  await f.step(f.id, 'claude-native', async model => {
+    const failure = await executionFetch(f.engine, f.request(model), f.transport)
+    expect((await readView(f.engine)).connectionIssue).toBe(failure.deny)
+    expect((await readView(f.engine)).connected).toBe(false)
+  })
+  f.engine.http.fetch = online
+  await updateView(f.engine, state => ({ ...state, notice: 'Another notice' }))
+  await f.step(`${f.id}-retry`, 'claude-native', async model => {
+    expect(await executionFetch(f.engine, f.request(model), f.transport)).toBe(ok)
+  })
+  expect(await readView(f.engine)).toMatchObject({ connected: true, notice: 'Another notice' })
+  expect((await readView(f.engine)).connectionIssue).toBeUndefined()
 })
 
 test('a host denial is preserved and cannot trigger a native or Ollama retry', async () => {

@@ -32,11 +32,12 @@ async function refresh($: EngineInterface, requested = false, ifStale = false): 
     const preferences = await getPreferences($)
     const connection = await getConnection($)
     if (version !== refreshVersion || await $.session.id() !== owner) return
-    await updateView($, current => ({ ...current, ...(revision === preferenceRevision ? { preferences } : {}), endpoint: connection.base }))
+    await updateView($, current => ({ ...current, ...(revision === preferenceRevision ? { preferences } : {}),
+      ...(current.endpoint !== connection.base ? { connected: false, connectionIssue: undefined, notice: '' } : {}), endpoint: connection.base }))
     const discovery = await loadModels($, connection, !ifStale)
-    const { models, connected } = discovery
+    const { models, connected, connectionIssue } = discovery
     if (version !== refreshVersion || await $.session.id() !== owner) return
-    await updateView($, current => ({ ...current, models, connected, notice: requested ? connected ? '' : 'Cannot reach Ollama. Check its address and sign-in.' : current.notice }))
+    await updateView($, current => ({ ...current, models, connected, connectionIssue, notice: requested ? '' : current.notice }))
     if (!ifStale) await refreshConfiguredWindow($).catch(() => undefined)
     // Publish identity before exposing native rows so an immediate selection
     // cannot mistake an Ollama model for the native fallback.
@@ -49,7 +50,7 @@ async function refresh($: EngineInterface, requested = false, ifStale = false): 
     }
   } catch (error) {
     if (version !== refreshVersion || await $.session.id() !== owner) return
-    await updateView($, current => ({ ...current, connected: false, notice: requested ? message(error) : current.notice }))
+    await updateView($, current => ({ ...current, connected: false, connectionIssue: undefined, notice: requested ? message(error) : current.notice }))
   }
 }
 

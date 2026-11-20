@@ -10,6 +10,15 @@ export class OllamaRequestError extends Error {
   constructor(message: string, readonly status?: number) { super(message) }
 }
 
+export class OllamaConnectionError extends Error {
+  constructor(readonly endpoint: string) {
+    const host = new URL(endpoint).host
+    super(endpoint === 'https://ollama.com'
+      ? `Can't reach ${host}. Check your internet connection and try again.`
+      : `Can't reach Ollama at ${host}. Check that Ollama is running and that the address in Settings → Advanced is correct.`)
+  }
+}
+
 export async function getConnection($: EngineInterface): Promise<Connection> {
   const saved = await $.store.get(CONNECTION_KEY)
   if (saved !== undefined && (typeof saved !== 'string' || !saved)) {
@@ -38,7 +47,7 @@ async function readModel($: EngineInterface, connection: Connection, name: strin
   const model = connection.base === 'https://ollama.com' ? shortName(name) : name
   const response = await $.http.fetch(`${connection.base}/api/show`, {
     method: 'POST', headers: headers(connection), body: JSON.stringify({ model }),
-  })
+  }).catch(() => { throw new OllamaConnectionError(connection.base) })
   if (!response.ok) throw new OllamaRequestError('Ollama could not load this model.', response.status)
   const shown = JSON.parse(response.text) as { capabilities?: string[]; remote_host?: string }
   if (!Array.isArray(shown.capabilities)) throw new Error('Ollama returned invalid model capabilities.')
@@ -54,7 +63,7 @@ export async function showModel($: EngineInterface, connection: Connection, name
   return model
 }
 
-export type Discovery = { models: OllamaModel[]; complete: boolean; connected: boolean }
+export type Discovery = { models: OllamaModel[]; complete: boolean; connected: boolean; connectionIssue?: string }
 
 export async function discoverModels($: EngineInterface, connection: Connection): Promise<Discovery> {
   const direct = connection.base === 'https://ollama.com'
@@ -73,8 +82,13 @@ export async function discoverModels($: EngineInterface, connection: Connection)
       connected = true
     }
   } catch { /* A partial catalog can add models, but must not remove any. */ }
-  if (!connected && cloud === undefined) throw new Error('Cannot reach Ollama. Check its address and sign-in.')
-  let complete = connected && cloud !== undefined
+  if (!connected) {
+    const connectionIssue = !response ? new OllamaConnectionError(connection.base).message
+      : response.status === 401 || response.status === 403 ? 'Ollama refused access to the model list. Check your Ollama sign-in.'
+      : 'Could not read the Ollama model list. Check the address in Settings → Advanced.'
+    return { models: cloud ?? [], complete: false, connected: false, connectionIssue }
+  }
+  let complete = cloud !== undefined
   cloud ??= []
   const names = [...new Set([...local, ...cloud.map(model => model.name)])]
   const models: OllamaModel[] = []

@@ -147,6 +147,31 @@ test('connection is disclosed on demand and saves only on Enter', async ($, on) 
   await ui.unmount()
 })
 
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`${surface} shows the failed address and clears the warning after the address is fixed`, async ($, on) => {
+    const fixture = setup(on, { ...initial, connected: false, settingsOpen: true })
+    fixture.http(() => ({ deny: 'Connection refused' }))
+    on('settings.read', () => ({ value: {} }))
+    on('config.set', (_, e) => ({ value: e.value }))
+    const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: `offline-${surface}`, props })
+    expect(await ui.find({ key: 'notice' })).toBeUndefined()
+    await ui.press({ key: 'advanced' })
+    await ui.input({ key: 'endpoint', text: 'http://127.0.0.1:49172' })
+    await ui.press({ key: 'settings' })
+    expect(fixture.state().connectionIssue).toContain('127.0.0.1:49172')
+    expect(fixture.state().notice).toBe('')
+    expect(await ui.find({ type: 'Text', text: "Can't reach Ollama at 127.0.0.1:49172. Check that Ollama is running and that the address in Settings → Advanced is correct." })).toBeDefined()
+    fixture.http(() => ({ value: { status: 200, ok: true, headers: {}, text: '{"models":[]}' } }))
+    await ui.press({ key: 'settings' })
+    await ui.press({ key: 'advanced' })
+    await ui.input({ key: 'endpoint', text: 'http://127.0.0.1:11434' })
+    expect(await ui.find({ type: 'Text', text: 'Connected' })).toBeDefined()
+    expect(await ui.find({ key: 'notice' })).toBeUndefined()
+    expect(fixture.state().preferences).toEqual(initial.preferences)
+    await ui.unmount()
+  })
+}
+
 test('native new alias keeps chat preferences and rediscovers connection after the view resets', async ($, on) => {
   const fixture = setup(on)
   fixture.values.set('connection-v1', 'http://saved-ollama:11434')

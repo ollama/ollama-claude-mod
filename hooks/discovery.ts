@@ -13,6 +13,10 @@ let syncing = Promise.resolve()
 let synchronized = ''
 let conflicts = 0
 
+export function invalidateStaleConnection(base: string, connected: boolean): void {
+  if (cached.get(base)?.discovery.connected !== connected) cached.delete(base)
+}
+
 function cacheKey(base: string): string {
   return `model-discovery-v1:${encodeURIComponent(base)}`
 }
@@ -44,9 +48,10 @@ export async function loadModels($: EngineInterface, connection: Connection, for
     let discovery: Discovery
     try {
       discovery = await discoverModels($, connection)
+      const receivedModels = discovery.connected || discovery.models.length > 0
       if (!discovery.complete) discovery.models = mergeModels(discovery.models, before)
       // Failure to save a cache must not discard a usable live catalog.
-      await $.store.set(cacheKey(base), discovery.models).catch(() => undefined)
+      if (receivedModels) await $.store.set(cacheKey(base), discovery.models).catch(() => undefined)
     } catch {
       discovery = { models: before, connected: false, complete: false }
     }

@@ -38,6 +38,7 @@ export type ViewState = {
   preferences: Preferences
   models: OllamaModel[]
   connected: boolean
+  connectionIssue?: string
   endpoint: string
   settingsOpen: boolean
   openMenu?: OpenMenu
