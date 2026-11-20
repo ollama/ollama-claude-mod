@@ -52,7 +52,7 @@ export function pickerMenu($: EngineInterface, e: RenderInput<'AbovePrompt'>, op
         onPress={() => setOpen(isOpen ? null : { key })} />
       {isOpen ? (
         <Box key={`${key}-list`} flexDirection="column" flexShrink={0} paddingX={1} paddingTop={rowGap} rowGap={rowGap}>
-          {menu.searchable ? <Input key={`${key}-search`} placeholder="Search models" value={query} autoFocus submitLabel={e.surface === 'terminal' ? '' : soleMatch(options, query) ? 'Use model' : 'Search'}
+          {menu.searchable ? <Input key={`${key}-search`} placeholder="Search models" value={query} autoFocus submitLabel={e.surface === 'terminal' ? '' : undefined}
             onInput={query => setOpen({ key, query })}
             onSubmit={text => {
               const found = menu.options.filter(one => matches(one, text))
