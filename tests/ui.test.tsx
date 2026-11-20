@@ -343,7 +343,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
 }
 
 for (const surface of ['desktop', 'terminal'] as const) {
-  test(`${surface}: mode introduction collapses after sending while the quick switch remains available`, async ($, on) => {
+  test(`${surface}: the Never prefix persists after sending, resuming, and starting a new chat`, async ($, on) => {
     const fixture = setup(on)
     fixture.http(() => ({ value: { status: 503, ok: false, headers: {}, text: '' } }))
     on('prompt.submit', (_, e) => ({ text: e.text }))
@@ -358,19 +358,20 @@ for (const surface of ['desktop', 'terminal'] as const) {
     if (surface === 'desktop') await ui.select({ key: 'mode', value: 'never' })
     else { await ui.press({ key: 'mode' }); await ui.press({ key: 'mode-option-never' }) }
     await ui.press({ key: 'settings' })
-    expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
+    const neverLabel = surface === 'desktop' ? 'When to use Ollama' : 'When to use Ollama: Never ▾'
+    expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe(neverLabel)
     await $.prompt.submit({ text: 'Continue', wait: false, origin: { kind: surface === 'desktop' ? 'sdk' : 'composer' } })
-    expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
+    expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe(neverLabel)
     await ui.unmount()
     // Remount/resume retains the compact control for a setup already used in this chat.
     ui = await mount()
-    expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
+    expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe(neverLabel)
     await ui.press({ key: 'settings' })
     await ui.press({ key: 'model' })
     await ui.unmount()
     fixture.session('new-chat')
     ui = await mount()
-    expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
+    expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe(neverLabel)
     expect(await ui.find({ key: 'settings-panel' })).toBeUndefined()
     expect(await ui.find({ key: 'model-search' })).toBeUndefined()
     expect((fixture.values.get('preferences:new-chat') as { value: unknown }).value).toEqual(fixture.state().preferences)
@@ -607,20 +608,22 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await ui.find({ type: 'Text', text: '· 43.3 tok/s' })).toBeDefined()
     expect(await ui.find({ key: 'enabled' })).toBeUndefined()
     if (surface === 'desktop') {
-      expect((await ui.find({ key: 'compact-mode' }))?.props).toMatchObject({ label: 'When to use Ollama', options: [{ value: 'never', label: 'Never' }, { value: 'subagent', label: 'Subagents Only' }, { value: 'full', label: 'Always' }] })
+      expect((await ui.find({ key: 'compact-mode' }))?.props).toMatchObject({ label: '', value: 'full', options: [{ value: 'never', label: 'Never' }, { value: 'subagent', label: 'Subagents Only' }, { value: 'full', label: 'Always' }] })
       await ui.select({ key: 'compact-mode', value: 'subagent' })
     }
     else {
-      expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe('When to use Ollama: Always ▾')
+      expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe('Always ▾')
       await ui.press({ key: 'compact-mode' })
       expect(await ui.find({ key: 'compact-mode-option-off' })).toBeUndefined()
       await ui.press({ key: 'compact-mode-option-subagent' })
     }
+    expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe(surface === 'desktop' ? '' : 'Subagents Only ▾')
     expect(fixture.state().preferences.enabled).toBe(true)
     expect(fixture.state().preferences.full).toBe('first')
     expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeDefined()
     expect(await ui.find({ key: 'summary-speed' })).toBeUndefined()
     await ui.press({ key: 'settings' })
+    expect((await ui.find({ key: 'mode' }))?.props.label).toBe(surface === 'desktop' ? 'When to use Ollama' : 'When to use Ollama: Subagents Only ▾')
     if (surface === 'desktop') await ui.select({ key: 'mode', value: 'never' })
     else { await ui.press({ key: 'mode' }); await ui.press({ key: 'mode-option-never' }) }
     expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeDefined()

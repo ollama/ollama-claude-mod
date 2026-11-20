@@ -5,7 +5,7 @@ import { pickerMenu } from './menu'
 import type { Menu } from './menu'
 import { modelChoices, modelLabel } from './catalog'
 
-export type UIState = ViewState & { activity?: ActivityState; isDark?: boolean; showMode?: boolean }
+export type UIState = ViewState & { activity?: ActivityState; isDark?: boolean }
 
 export type UIActions = {
   setMode: (mode: Mode | 'never') => Promise<void>
@@ -93,7 +93,7 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
         </Box>
         {!state.settingsOpen && rows.length > 0 ? <Button key="subagents-toggle" plain dimColor
           label={`${rows.length} ${rows.length === 1 ? 'subagent' : 'subagents'}${succeeded ? ' ✓' : ''} ${hidden ? '▸' : '▾'}`} onPress={actions.toggleSubagents} /> : null}
-        {!state.settingsOpen ? usagePicker('compact-mode', state.showMode === false ? '' : undefined) : null}
+        {!state.settingsOpen ? usagePicker('compact-mode', preferences.enabled ? '' : undefined) : null}
         {state.selection?.status === 'failed' ? <Button key="retry-switch" plain label="Retry" onPress={() => actions.setMode(preferences.enabled ? preferences.mode : 'never')} /> : null}
         <Button key="settings" plain dimColor label={state.settingsOpen ? 'Done' : 'Settings'} onPress={actions.toggleSettings} />
       </Box>

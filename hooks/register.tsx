@@ -254,8 +254,7 @@ export const register: Register = on => {
     const activity = await readActivity($).catch(() => undefined)
     const appearance = await readAppearance($).catch(() => ({ isDark: true }))
     const state = { ...current, ...(preferences ? { preferences } : {}), activity, ...appearance }
-    const summary = await readSummary($, state).catch(() => undefined)
-    return renderUI($, e, { ...state, showMode: summary?.visible ?? true }, {
+    return renderUI($, e, state, {
       setMode: async value => {
         try { await persist($, value === 'never' ? { enabled: false } : { enabled: true, mode: value }, owner) }
         catch (error) { if (await $.session.id() === owner) await notice($, message(error)) }
