@@ -24,7 +24,7 @@ function soleMatch(options: Menu['options'], query: string) {
   return exact.length === 1 ? exact[0] : undefined
 }
 
-type ScrollWindow = { surface: RenderSurface; offset: number; columns: number; key: string; query: string; first: number; rows: number; count: number; setOpen: (open: OpenMenu) => Promise<void> }
+type ScrollWindow = { surface: RenderSurface; offset: number; columns: number; key: string; query: string; first: number; rows: number; rowGap: number; count: number; setOpen: (open: OpenMenu) => Promise<void> }
 const windows = new Map<string, ScrollWindow>()
 
 export function clearPickerWindows(surface?: RenderSurface): void {
@@ -36,9 +36,11 @@ export async function scrollPicker($: EngineInterface, e: Parameters<Hook<'ui.sc
   if (e.component !== 'AbovePrompt' || e.origin.kind !== 'person' || !window) return next(e)
   if (e.pointer) {
     const row = e.pointer.row + window.offset
-    const footer = window.count > window.rows ? 1 : 0
+    const stride = 1 + window.rowGap
+    const footer = window.count > window.rows ? stride : 0
     const end = e.contentRows - footer
-    if (e.pointer.column < 0 || e.pointer.column >= window.columns || row < end - Math.min(window.rows, window.count) || row >= end) return next(e)
+    const height = Math.min(window.rows, window.count) * stride - window.rowGap
+    if (e.pointer.column < 0 || e.pointer.column >= window.columns || row < end - height || row >= end) return next(e)
   }
   const current = (await readView($)).openMenu
   if (windows.get(e.requestId) !== window || current?.key !== window.key || (current.query ?? '') !== window.query) return next(e)
@@ -62,10 +64,11 @@ export function pickerMenu($: EngineInterface, e: RenderInput<'AbovePrompt'>, op
   const options = menu.options.filter(one => matches(one, query))
   const selected = options.findIndex(one => one.value === value)
   // Small overscan keeps the native band scrollable for arrow/Page keys.
-  const rows = Math.max(3, Math.min(24, e.props.maxRows - 2))
+  const rowGap = menu.searchable && e.surface === 'desktop' ? 1 : 0
+  const rows = Math.max(3, Math.min(24, Math.floor((e.props.maxRows - 2) / (1 + rowGap))))
   const first = Math.max(0, Math.min(isOpen && open.first >= 0 ? open.first : selected - Math.floor(rows / 2), options.length - rows))
   const shown = menu.searchable ? options.slice(first, first + rows) : options
-  if (isOpen && menu.searchable) windows.set(e.requestId, { surface: e.surface, offset: e.props.scroll?.offset ?? 0, columns: e.props.bodyColumns, key, query, first, rows, count: options.length, setOpen })
+  if (isOpen && menu.searchable) windows.set(e.requestId, { surface: e.surface, offset: e.props.scroll?.offset ?? 0, columns: e.props.bodyColumns, key, query, first, rows, rowGap, count: options.length, setOpen })
   else if (windows.get(e.requestId)?.key === key) windows.delete(e.requestId)
   while (windows.size > 16) windows.delete(windows.keys().next().value!)
   const move = (by: number) => setOpen({ key, query, first: Math.max(0, Math.min(first + by, options.length - rows)) })
@@ -78,7 +81,7 @@ export function pickerMenu($: EngineInterface, e: RenderInput<'AbovePrompt'>, op
       <Button key={key} plain label={`${label ? `${label}: ` : ''}${menu.options.find(one => one.value === value)?.label ?? value}${isOpen ? ' ▴' : ' ▾'}`}
         onPress={() => setOpen(isOpen ? null : { key, first: -1 })} />
       {isOpen ? (
-        <Box flexDirection="column" paddingX={1}>
+        <Box key={`${key}-list`} flexDirection="column" flexShrink={0} paddingX={1} paddingTop={rowGap} rowGap={rowGap}>
           {menu.searchable ? <Input key={`${key}-search`} placeholder="Search models" value={query} autoFocus submitLabel={e.surface === 'terminal' ? '' : soleMatch(options, query) ? 'Use model' : 'Search'}
             onInput={query => setOpen({ key, query, first: 0 })}
             onSubmit={text => {
