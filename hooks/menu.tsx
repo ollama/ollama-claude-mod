@@ -16,6 +16,14 @@ function matches(option: Menu['options'][number], query: string): boolean {
   return query.toLowerCase().trim().split(/\s+/).every(term => text.includes(term))
 }
 
+function soleMatch(options: Menu['options'], query: string) {
+  const id = query.trim().toLowerCase()
+  if (!id) return undefined
+  if (options.length === 1) return options[0]
+  const exact = options.filter(option => option.value.toLowerCase() === id)
+  return exact.length === 1 ? exact[0] : undefined
+}
+
 type ScrollWindow = { surface: RenderSurface; offset: number; columns: number; key: string; query: string; first: number; rows: number; count: number; setOpen: (open: OpenMenu) => Promise<void> }
 const windows = new Map<string, ScrollWindow>()
 
@@ -71,13 +79,12 @@ export function pickerMenu($: EngineInterface, e: RenderInput<'AbovePrompt'>, op
         onPress={() => setOpen(isOpen ? null : { key, first: -1 })} />
       {isOpen ? (
         <Box flexDirection="column" paddingX={1}>
-          {menu.searchable ? <Input key={`${key}-search`} placeholder="Search models" value={query} autoFocus submitLabel=""
+          {menu.searchable ? <Input key={`${key}-search`} placeholder="Search models" value={query} autoFocus submitLabel={e.surface === 'terminal' ? '' : soleMatch(options, query) ? 'Use model' : 'Search'}
             onInput={query => setOpen({ key, query, first: 0 })}
             onSubmit={text => {
               const found = menu.options.filter(one => matches(one, text))
-              const exact = found.filter(one => one.value.toLowerCase() === text.trim().toLowerCase())
-              const choice = exact.length === 1 ? exact[0] : found.length === 1 ? found[0] : undefined
-              if (choice) return pick(choice.value)()
+              const choice = soleMatch(found, text)
+              return choice ? pick(choice.value)() : setOpen({ key, query: text, first: 0 })
             }} /> : null}
           {options.length === 0 ? <Text dimColor>No models found</Text> : shown.map(one => (
             <Button key={`${key}-option-${one.value}`} plain label={`${one.value === value ? '✓ ' : '  '}${one.label}`} onPress={pick(one.value)} />
