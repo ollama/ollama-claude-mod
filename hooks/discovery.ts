@@ -22,6 +22,7 @@ function savedModels(value: unknown): OllamaModel[] {
   return value.filter((model): model is OllamaModel => model && typeof model === 'object' &&
     typeof model.name === 'string' && model.name.trim() && typeof model.isCloud === 'boolean' && model.isDecision === false &&
     Number.isSafeInteger(model.contextLength) && model.contextLength >= 0 && Array.isArray(model.efforts) &&
+    (model.defaultEffort === undefined || model.efforts.includes(model.defaultEffort)) &&
     model.efforts.every((effort: unknown) => ['off', 'on', 'low', 'medium', 'high', 'xhigh', 'max'].includes(String(effort))))
 }
 

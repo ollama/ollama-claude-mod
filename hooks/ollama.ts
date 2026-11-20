@@ -96,11 +96,10 @@ export async function prepareRequest(
   model: string,
   effort: Thinking | undefined,
   connection: Connection,
-): Promise<{ url: string; init: HttpInit }> {
+): Promise<{ url: string; init: HttpInit; effectiveEffort?: Thinking }> {
   if (!model.trim()) throw new Error('Choose an Ollama model.')
   const capabilities = await showModel($, connection, model)
-  // A model switch may leave a saved effort from the previous model. The UI
-  // shows Default in that case; inference must use the same effective value.
+  // Omit an unsupported override so Ollama resolves its own model default.
   const supportedEffort = effort !== undefined && capabilities.efforts.includes(effort) ? effort : undefined
   // Ollama gives an explicit thinking switch precedence over named effort.
   // Clear Claude's switch in this copy; the original remains intact for native requests.
@@ -111,6 +110,7 @@ export async function prepareRequest(
   }
   return {
     url: `${connection.base}/v1/messages`,
+    effectiveEffort: supportedEffort ?? capabilities.defaultEffort,
     init: {
       method: 'POST',
       headers: { ...headers(connection), 'anthropic-version': '2023-06-01' },

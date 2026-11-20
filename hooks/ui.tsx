@@ -39,12 +39,13 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
   const model = preferences[preferences.mode]
   const effort = preferences.mode === 'full' ? preferences.fullEffort : preferences.subagentEffort
   const models = state.settingsOpen ? modelChoices(state.models, model) : []
-  const selected = models.find(one => one.name === model)
+  const selected = (state.settingsOpen ? models : state.models).find(one => one.name === model)
   const options = models.map(one => ({ value: one.name, label: modelLabel(one) }))
   // Keep unavailable saved models visible without changing the user's choice.
   if (model && !selected) options.unshift({ value: model, label: `${model} (unavailable)` })
   if (!model) options.unshift({ value: '', label: 'Choose model' })
   const efforts = selected?.efforts ?? []
+  const currentEffort = effort && efforts.includes(effort) ? effort : selected?.defaultEffort
   const isTerminal = e.surface === 'terminal'
   const advanced = state.openMenu?.key === 'advanced'
   const openRow = !advanced && (isTerminal || state.openMenu?.key === 'model') ? state.openMenu?.key : undefined
@@ -77,7 +78,7 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
     ...(usage.outputTokens !== undefined ? [`${usage.outputTokens.toLocaleString('en-US')} output tokens`] : []),
   ].join(' · ')
   const visuals = activityElements($, e, state.isDark ?? false)
-  const mainEffort = main?.effort ?? (!native ? preferences.fullEffort : undefined)
+  const mainEffort = main?.effort ?? (!native && target === model ? currentEffort : undefined)
   const summaryEffort = mainEffort === 'on' || mainEffort === 'off'
     ? `Thinking ${mainEffort}` : mainEffort ? effortLabels[mainEffort] : undefined
   const bar = (
@@ -118,9 +119,9 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
             {usagePicker('mode')}
           </Box>
           {!openRow || openRow === 'model' ? picker({ key: 'model', label: 'Model', value: model, options, searchable: true, onSelect: actions.setModel }) : null}
-          {efforts.length > 0 && (!openRow || openRow === 'effort') ? picker({ key: 'effort', label: 'Effort', value: effort && efforts.includes(effort) ? effort : '',
-            options: [{ value: '', label: 'Default' }, ...efforts.map(value => ({ value, label: effortLabels[value] }))],
-            onSelect: value => actions.setEffort(value ? value as Thinking : undefined) }) : null}
+          {efforts.length > 0 && (!openRow || openRow === 'effort') ? picker({ key: 'effort', label: 'Effort', value: currentEffort ?? '',
+            options: efforts.map(value => ({ value, label: effortLabels[value] })),
+            onSelect: value => actions.setEffort(value === selected?.defaultEffort ? undefined : value as Thinking) }) : null}
           {!openRow ? <Button key="advanced" plain dimColor label={`Advanced ${advanced ? '▾' : '▸'}`}
             onPress={() => actions.setOpenMenu(advanced ? null : { key: 'advanced' })} /> : null}
           {advanced ? <Box key="settings-details" flexDirection="column" rowGap={isTerminal ? 0 : 0.5}>

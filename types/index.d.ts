@@ -18,6 +18,7 @@ export type OllamaModel = {
   maximumContext?: number
   parameterContext?: number
   efforts: Thinking[]
+  defaultEffort?: Thinking
   isDecision: boolean
 }
 

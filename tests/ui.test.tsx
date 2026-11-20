@@ -6,8 +6,8 @@ import { cancelSelection } from '../hooks/selection'
 const initial: UIState = {
   preferences: { enabled: true, mode: 'full', full: 'first', subagent: 'second', fullEffort: 'high', subagentEffort: 'on' },
   models: [
-    { name: 'first', isCloud: false, isDecision: false, contextLength: 8192, efforts: ['low', 'high'] },
-    { name: 'second', isCloud: false, isDecision: false, contextLength: 8192, efforts: ['off', 'on'] },
+    { name: 'first', isCloud: false, isDecision: false, contextLength: 8192, efforts: ['low', 'high'], defaultEffort: 'low' },
+    { name: 'second', isCloud: false, isDecision: false, contextLength: 8192, efforts: ['off', 'on'], defaultEffort: 'off' },
     { name: 'decider', isCloud: false, isDecision: true, contextLength: 8192, efforts: [] },
   ],
   connected: true, endpoint: 'http://localhost:11434', settingsOpen: false, notice: '',
@@ -105,7 +105,7 @@ test('desktop: selecting a mode uses its model and effort, and off restores Clau
   const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'bar', props })
   await ui.press({ key: 'settings' })
   expect((await ui.find({ key: 'model' }))?.props).toMatchObject({ label: 'Model: First ▾' })
-  expect((await ui.find({ key: 'effort' }))?.props).toMatchObject({ value: 'high', options: [{ value: '', label: 'Default' }, { value: 'low', label: 'Low' }, { value: 'high', label: 'High' }] })
+  expect((await ui.find({ key: 'effort' }))?.props).toMatchObject({ value: 'high', options: [{ value: 'low', label: 'Low' }, { value: 'high', label: 'High' }] })
   await ui.select({ key: 'mode', value: 'subagent' })
   expect(await ui.find({ type: 'Text', text: 'Claude runs this chat. Ollama runs eligible subagents.' })).toBeUndefined()
   expect(values.get('preferences:ui-test:mode')).toEqual({ version: 1, value: 'subagent' })
@@ -113,7 +113,9 @@ test('desktop: selecting a mode uses its model and effort, and off restores Clau
   expect((await ui.find({ key: 'effort' }))?.props).toMatchObject({ value: 'on' })
   await ui.press({ key: 'model' })
   await ui.press({ key: 'model-option-first' })
-  await ui.select({ key: 'effort', value: '' })
+  expect((await ui.find({ key: 'effort' }))?.props.value).toBe('low')
+  await ui.select({ key: 'effort', value: 'high' })
+  await ui.select({ key: 'effort', value: 'low' })
   expect(values.get('preferences:ui-test:subagent')).toEqual({ version: 1, value: 'first' })
   expect(values.get('preferences:ui-test:subagentEffort')).toEqual({ version: 1, value: null })
   await ui.select({ key: 'mode', value: 'never' })
@@ -421,7 +423,9 @@ test('terminal menus are clickable, exclusive, close on selection, and preserve 
   await ui.press({ key: 'model-option-first' })
   await ui.press({ key: 'effort' })
   expect(await ui.find({ key: 'enabled' })).toBeUndefined()
-  await ui.press({ key: 'effort-option-' })
+  expect((await ui.find({ key: 'effort-option-low' }))?.props.label).toBe('✓ Low')
+  expect(await ui.find({ key: 'effort-option-' })).toBeUndefined()
+  await ui.press({ key: 'effort-option-low' })
   expect(values.get('preferences:ui-test:subagent')).toEqual({ version: 1, value: 'first' })
   expect(values.get('preferences:ui-test:subagentEffort')).toEqual({ version: 1, value: null })
   expect(await ui.find({ key: 'effort-option-' })).toBeUndefined()

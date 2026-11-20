@@ -26,6 +26,8 @@ function soleMatch(options: Menu['options'], query: string) {
 export function pickerMenu($: EngineInterface, e: RenderInput<'AbovePrompt'>, open: OpenMenu | undefined, menu: Menu, setOpen: (open: OpenMenu) => Promise<void>) {
   const { Box, Button, Input, Text } = $.ui.resolve(e)
   const { key, label, value, onSelect } = menu
+  const selectedLabel = menu.options.find(one => one.value === value)?.label ?? value
+  const title = [label, selectedLabel].filter(Boolean).join(': ')
   const isOpen = open?.key === key
   const query = isOpen ? open.query ?? '' : ''
   const options = isOpen && query.trim() ? menu.options.filter(one => matches(one, query)) : menu.options
@@ -48,7 +50,7 @@ export function pickerMenu($: EngineInterface, e: RenderInput<'AbovePrompt'>, op
   )
   return (
     <Box key={`${key}-menu`} flexDirection="column" alignItems="flex-start">
-      <Button key={key} plain label={`${label ? `${label}: ` : ''}${menu.options.find(one => one.value === value)?.label ?? value}${isOpen ? ' ▴' : ' ▾'}`}
+      <Button key={key} plain label={`${title}${isOpen ? ' ▴' : ' ▾'}`}
         onPress={() => setOpen(isOpen ? null : { key })} />
       {isOpen ? (
         <Box key={`${key}-list`} flexDirection="column" flexShrink={0} paddingX={1} paddingTop={rowGap} rowGap={rowGap}>

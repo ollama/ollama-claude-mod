@@ -1,4 +1,4 @@
-import type { Effort, Thinking } from '../types'
+import type { Effort, OllamaModel, Thinking } from '../types'
 
 const EFFORT_LEVELS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
@@ -31,24 +31,34 @@ export function connectionAddress(value: string): string {
   return url.origin
 }
 
-type Show = { parameters?: string; model_info?: Record<string, unknown>; thinking?: { values?: unknown[] } }
+type Show = { parameters?: string; model_info?: Record<string, unknown>; thinking?: { values?: unknown[]; default?: unknown } }
+
+function parseThinking(value: unknown): Thinking | undefined {
+  if (value === false) return 'off'
+  if (value === true) return 'on'
+  return EFFORT_LEVELS.find(level => level === value)
+}
 
 // /api/show names the context length after the model's architecture, as in
 // `kimi-k3.context_length`. Its thinking.values hold the model's effort names,
 // and false and true where the model can turn thinking off and on.
-export function parseShow(text: string): { contextLength: number; parameterContext?: number; efforts: Thinking[] } {
+export function parseShow(text: string): Pick<OllamaModel, 'contextLength' | 'parameterContext' | 'efforts' | 'defaultEffort'> {
   const show = JSON.parse(text) as Show
   const info = show.model_info ?? {}
   const architecture = info['general.architecture']
   const lengths = Object.entries(info).filter(([key]) => key.endsWith('.context_length'))
   const length = typeof architecture === 'string' ? info[`${architecture}.context_length`] : lengths.length === 1 ? lengths[0]?.[1] : undefined
-  const efforts = (show.thinking?.values ?? []).flatMap((value): Thinking[] =>
-    value === false ? ['off'] : value === true ? ['on'] : EFFORT_LEVELS.includes(value as Effort) ? [value as Effort] : [],
-  )
+  const efforts = (show.thinking?.values ?? []).map(parseThinking).filter((value): value is Thinking => value !== undefined)
+  const defaultEffort = parseThinking(show.thinking?.default)
 
   const parameter = /^\s*num_ctx\s+(\d+)\s*$/m.exec(show.parameters ?? '')
   const parameterContext = parameter ? Number(parameter[1]) : undefined
-  return { contextLength: Number.isSafeInteger(length) && Number(length) > 0 ? Number(length) : 0, ...(parameterContext && Number.isSafeInteger(parameterContext) ? { parameterContext } : {}), efforts }
+  return {
+    contextLength: Number.isSafeInteger(length) && Number(length) > 0 ? Number(length) : 0,
+    ...(parameterContext && Number.isSafeInteger(parameterContext) ? { parameterContext } : {}),
+    efforts,
+    ...(defaultEffort && efforts.includes(defaultEffort) ? { defaultEffort } : {}),
+  }
 }
 
 type Block = { type: string; text?: string; signature?: string; input_schema?: unknown; allowed_domains?: string[]; blocked_domains?: string[]; cache_control?: { ttl?: string; scope?: string } }

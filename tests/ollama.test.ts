@@ -4,14 +4,14 @@ import { discoverModels, getConnection, prepareRequest } from '../hooks/ollama'
 import { CLOUD_CATALOG, cloudModels } from '../hooks/catalog'
 
 type Sent = { url: string; init?: HttpInit }
-function fixture(options: { host?: string; key?: string; capabilities?: string[]; efforts?: (string | boolean)[] } = {}) {
+function fixture(options: { host?: string; key?: string; capabilities?: string[]; efforts?: (string | boolean)[]; defaultEffort?: string | boolean } = {}) {
   const requests: Sent[] = []
   const engine = {
     store: { get: async () => options.host },
     env: { get: async (name: string) => name === 'OLLAMA_API_KEY' ? options.key : undefined },
     http: { fetch: async (url: string, init?: HttpInit) => {
       requests.push({ url, init })
-      return { status: 200, ok: true, headers: {}, text: JSON.stringify({ capabilities: options.capabilities ?? ['tools'], thinking: { values: options.efforts ?? [] } }) }
+      return { status: 200, ok: true, headers: {}, text: JSON.stringify({ capabilities: options.capabilities ?? ['tools'], thinking: { values: options.efforts ?? [], default: options.defaultEffort } }) }
     } },
   } as unknown as EngineInterface
   return { engine, requests }
@@ -71,6 +71,21 @@ for (const choice of [
     expect(native).toEqual(original)
   })
 }
+
+test('Ollama owns the implicit thinking default and only supported overrides go on the wire', async () => {
+  const connection = { base: 'http://localhost:11434', key: '' }
+  for (const [reported, expected] of [['high', 'high'], [false, 'off'], [true, 'on'], ['max', undefined], [undefined, undefined]] as const) {
+    const f = fixture({ efforts: [false, true, 'high'], defaultEffort: reported })
+    const request = await prepareRequest(f.engine, body, 'model', 'xhigh', connection)
+    expect(request.effectiveEffort).toBe(expected)
+    const sent = JSON.parse(String(request.init.body))
+    expect(sent.thinking).toBeUndefined()
+    expect(sent.output_config).toBeUndefined()
+    const explicit = await prepareRequest(f.engine, body, 'model', 'off', connection)
+    expect(explicit.effectiveEffort).toBe('off')
+    expect(JSON.parse(String(explicit.init.body)).thinking).toEqual({ type: 'disabled' })
+  }
+})
 
 test('discovery merges cloud models with local models and preserves catalog entries when metadata is unavailable', async () => {
   const requests: Sent[] = []

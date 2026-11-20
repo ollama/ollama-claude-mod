@@ -1,4 +1,4 @@
-import type { EngineInterface, Hook, HttpInit } from 'claude-code'
+import type { EngineInterface, Hook } from 'claude-code'
 import type { Thinking } from '../types'
 import { getPreferences, readView, updateView } from './runtime'
 import { getConnection, prepareRequest, OllamaRequestError } from './ollama'
@@ -217,7 +217,7 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
   run.accepted = false
   inFlight.set(loop, run)
   const activityRun = run
-  run.activityEffort = routed ? run.effort ?? (typeof e.effort === 'string' ? e.effort : undefined) : typeof e.effort === 'string' ? e.effort : undefined
+  run.activityEffort = !routed && typeof e.effort === 'string' ? e.effort : undefined
   const main = (running: boolean) => ({ model: activityRun.actualModel ?? model, target: activityRun.model, effort: activityRun.activityEffort, tokens: activityRun.output ?? 0, ...(activityRun.duration ? { tokensPerSecond: (activityRun.measuredOutput ?? 0) * 1000 / activityRun.duration } : {}), running })
   if (!e.agentId) await startMainActivity($, run.sessionId, main(true))
   else await updateAgentActivity($, run.sessionId, e.agentId, row => ({ ...row, model, running: true, failed: undefined }))
@@ -410,7 +410,7 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   if (whole.tools?.some(tool => tool.allowed_domains?.length || tool.blocked_domains?.length)) {
     return fail($, run, 'request', 'Web search domain restrictions are not supported by this route.')
   }
-  let request: { url: string; init: HttpInit }
+  let request: Awaited<ReturnType<typeof prepareRequest>>
   try { request = await prepareRequest($, whole, run.model, run.effort, run.connection) }
   catch (error) {
     if (next.signal.aborted) return { deny: 'Request cancelled.' }
@@ -419,7 +419,8 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   if (next.signal.aborted) return { deny: 'Request cancelled.' }
   let response: Awaited<ReturnType<typeof next>>
   try {
-    response = await next(request)
+    run.activityEffort = request.effectiveEffort
+    response = await next({ url: request.url, init: request.init })
   }
   catch (error) {
     if (next.signal.aborted) throw error

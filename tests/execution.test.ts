@@ -79,6 +79,20 @@ test('Ollama totals combine completed main and subagent requests, include cached
   expect((await readActivity(f.engine)).ollama).toBeUndefined()
 })
 
+test('routed main activity uses the Ollama model default even when Claude requests a different effort', async () => {
+  const f = fixture('full', true)
+  f.engine.http.fetch = async () => ({ status: 200, ok: true, headers: {}, text: JSON.stringify({ capabilities: ['tools'], thinking: { values: ['low', 'max'], default: 'max' } }) })
+  const turnId = f.id
+  const next = async function* (e: { model: string }) {
+    await executionFetch(f.engine, f.request(e.model), f.transport)
+    yield { kind: 'text', index: 0, text: 'done' }
+    return { turnId, index: 0, answer: 'done', toolUses: [], stopReason: 'end_turn' }
+  }
+  const stream = executionStep(f.engine, { turnId, index: 0, model: 'claude-native', effort: 'medium', messageCount: 1 }, next as unknown as Parameters<Hook<'turn.step'>>[2])
+  for await (const _chunk of stream) { /* drain */ }
+  expect((await readActivity(f.engine)).main?.effort).toBe('max')
+})
+
 test('a thinking-only Ollama response counts its reported output once in both tok/s and chat totals', async () => {
   const f = fixture('full', true)
   let now = 0
