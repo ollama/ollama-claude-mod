@@ -78,6 +78,26 @@ test('Ollama totals combine completed main and subagent requests, include cached
   expect((await readActivity(f.engine)).ollama).toBeUndefined()
 })
 
+test('a thinking-only Ollama response counts its reported output once in both tok/s and chat totals', async () => {
+  const f = fixture('full', true)
+  let now = 0
+  const engine = { ...f.engine, clock: { ...f.engine.clock, now: async () => now } }
+  const turnId = f.id
+  const usage: TurnUsage = { model: 'full-model', input_tokens: 42, output_tokens: 16, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  const next = async function* (e: { model: string }) {
+    await executionFetch(engine, f.request(e.model), f.transport)
+    yield { kind: 'thinking', index: 0, text: 'Working it out' }
+    now = 2000
+    yield { kind: 'stop', stopReason: 'max_tokens', usage }
+    return { turnId, index: 0, answer: '', toolUses: [], stopReason: 'max_tokens', usage }
+  }
+  const stream = executionStep(engine, { turnId, index: 0, model: 'claude-native', messageCount: 1 }, next as unknown as Parameters<Hook<'turn.step'>>[2])
+  for await (const _chunk of stream) { /* drain */ }
+  const activity = await readActivity(engine)
+  expect(activity.main).toMatchObject({ tokens: 16, tokensPerSecond: 8 })
+  expect(activity.ollama).toEqual({ requests: 1, inputTokens: 42, outputTokens: 16 })
+})
+
 test('interrupted responses do not count as completed requests and missing usage never becomes a zero-token total', async () => {
   const f = fixture('full', true)
   const error = new Error('Interrupted stream')
