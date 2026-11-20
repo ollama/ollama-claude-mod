@@ -5,7 +5,7 @@ import os from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { pathToFileURL } from 'node:url'
-import { CLOUD_CATALOG, cloudModels, isChatModel, isCloudModel, modelRow, modelChoices, compareModels } from '../hooks/catalog.ts'
+import { CLOUD_CATALOG, canonicalModel, cloudModels, isChatModel, isCloudModel, modelRow, modelChoices, compareModels } from '../hooks/catalog.ts'
 import { connectionAddress } from '../hooks/route.ts'
 import { canRegisterPicker, uninstallPlugin } from './plugin-installation.mjs'
 
@@ -149,7 +149,8 @@ export async function configure({ mode = 'install', settingsPath, url = process.
         else settings.modelPicker = { ...current, options: remaining }
       }
       owned = []
-    } else if (discovered.some(row => row.model === settings.model) && !discovered.some(row => row.model === nativeModel)) {
+    } else if (typeof settings.model === 'string' && discovered.some(row => canonicalModel(row.model) === canonicalModel(settings.model)) &&
+        !discovered.some(row => canonicalModel(row.model) === canonicalModel(nativeModel))) {
       // The active session keeps its selected model. Only the next process
       // starts on Claude, until the plugin has loaded Ollama's real context.
       if (nativeModel === 'default') delete settings.model

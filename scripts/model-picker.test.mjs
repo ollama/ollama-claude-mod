@@ -31,6 +31,15 @@ test('startup replaces only an Ollama launch default and preserves picker, prefe
   assert.deepEqual(await f.read(), withoutModel)
 })
 
+test('startup recognizes a bare local tag and refuses its alias as a native replacement', async t => {
+  const f = await fixture(t, { model: 'inkling-2-mini' })
+  const catalog = [{ name: 'inkling-2-mini:latest', isCloud: false, isDecision: false }]
+  await configure({ ...f, mode: 'startup', catalog, nativeModel: 'inkling-2-mini:latest' })
+  assert.equal((await f.read()).model, 'inkling-2-mini')
+  await configure({ ...f, mode: 'startup', catalog, nativeModel: 'claude-opus-5-5' })
+  assert.equal((await f.read()).model, 'claude-opus-5-5')
+})
+
 test('install is idempotent and remove preserves existing rows and settings', async t => {
   const initial = { model: 'opus', permissions: { allow: ['Read'] }, modelPicker: { options: [{ model: 'existing', label: 'Mine' }], replaceBuiltInOptions: true } }
   const f = await fixture(t, initial)

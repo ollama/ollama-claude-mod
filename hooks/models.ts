@@ -2,7 +2,7 @@ import type { ClassicHookInputs, EngineInterface, Settings } from 'claude-code'
 import type { OllamaModel, Preferences } from '../types'
 import { getPreferences, preferenceOwner, readView, updateView } from './runtime'
 import { savePreference, savePreferences } from './settings'
-import { modelRow } from './catalog'
+import { canonicalModel, modelRow } from './catalog'
 import type { PickerRow } from './catalog'
 import { readCachedModels } from './discovery'
 import { getConnection } from './ollama'
@@ -87,15 +87,17 @@ export async function refreshModelCatalog($: EngineInterface, models: OllamaMode
 
 export async function isOllamaModel($: EngineInterface, candidate: string): Promise<boolean> {
   if (!candidate) return false
+  const tag = canonicalModel(candidate)
+  const matches = (name: string) => canonicalModel(name) === tag
   const preferences = await getPreferences($)
-  if (candidate === preferences.full || candidate === preferences.subagent) return true
-  if (catalogRows(await $.store.get(CATALOG_STORE)).some(row => row.model === candidate)) return true
+  if (matches(preferences.full) || matches(preferences.subagent)) return true
+  if (catalogRows(await $.store.get(CATALOG_STORE)).some(row => matches(row.model))) return true
   const state = await readView($)
-  if (state.models.some(model => !model.isDecision && model.name === candidate)) return true
+  if (state.models.some(model => !model.isDecision && matches(model.name))) return true
   for (const source of ['policy', 'flag', 'user'] as const) {
-    if (catalog(await $.settings.read({ source })).some(row => row.model === candidate)) return true
+    if (catalog(await $.settings.read({ source })).some(row => matches(row.model))) return true
   }
-  try { return (await readCachedModels($, await getConnection($))).some(model => model.name === candidate) }
+  try { return (await readCachedModels($, await getConnection($))).some(model => matches(model.name)) }
   catch { return false } // Optional cached identity must not break native routing.
 }
 

@@ -78,6 +78,19 @@ test('worker resolution and startup of an older chat cannot replace the main fal
   expect(await isOllamaModel(f.engine, 'local-model')).toBe(true)
 })
 
+test('a saved bare Ollama tag cannot become the Claude target when leaving full mode', async () => {
+  const f = fixture({ ...DEFAULT_PREFERENCES, mode: 'subagent' })
+  f.values.set('model-catalog-v1', [{ ...rows[0], model: 'inkling-2-mini:latest' }])
+  f.values.set('native-model-v1:model-chat', 'inkling-2-mini')
+  f.values.set('native-model-v1:last', 'claude-opus-5-5')
+  expect(await resolveNativeModel(f.engine, DEFAULT_PREFERENCES.full)).toBe('claude-opus-5-5')
+  await rememberNativeModel(f.engine, 'inkling-2-mini', true)
+  expect(f.values.get('native-model-v1:last')).toBe('claude-opus-5-5')
+  f.values.set('native-model-v1:last', 'inkling-2-mini:latest')
+  expect(await resolveNativeModel(f.engine, DEFAULT_PREFERENCES.full)).toBe('default')
+  expect(await isOllamaModel(f.engine, 'inkling-2-mini:cloud')).toBe(false)
+})
+
 test('automatic and resume switches leave preference defaults unchanged', async () => {
   const f = fixture({ ...DEFAULT_PREFERENCES, enabled: true, mode: 'subagent', subagent: 'local-model' })
   const before = await loadPreferences(f.engine, 'model-chat')
