@@ -36,7 +36,7 @@ async function refresh($: EngineInterface, requested = false, ifStale = false): 
     const discovery = await loadModels($, connection, !ifStale)
     const { models, connected } = discovery
     if (version !== refreshVersion || await $.session.id() !== owner) return
-    await updateView($, current => ({ ...current, models, connected, notice: requested && !connected ? 'Cannot reach Ollama. Check its address and sign-in.' : '' }))
+    await updateView($, current => ({ ...current, models, connected, notice: requested ? connected ? '' : 'Cannot reach Ollama. Check its address and sign-in.' : current.notice }))
     if (!ifStale) await refreshConfiguredWindow($).catch(() => undefined)
     // Publish identity before exposing native rows so an immediate selection
     // cannot mistake an Ollama model for the native fallback.

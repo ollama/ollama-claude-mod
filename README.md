@@ -41,7 +41,7 @@ New installs start with **Subagents Only** enabled. Claude Code opens with your 
 
 New chats inherit your last saved setup. Selecting Never keeps both model choices and the previously selected mode. Existing disabled setups stay disabled. The model picker includes local models and available Ollama cloud models. Type to search.
 
-Settings also includes the model’s supported effort options, an editable context length, and the Ollama connection address.
+Settings shows the model and its supported effort options. Open **Advanced** for context length, the Ollama address, and request usage. Select **Done** to return to the compact status and worker activity. The compact mode button stays available after the first message. Errors remain visible when settings are closed; a failed model switch includes **Retry**. Workers show **Starting…** until their first response confirms the model.
 
 ### Commands
 

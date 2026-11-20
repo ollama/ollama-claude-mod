@@ -165,7 +165,7 @@ export async function executionSpawn($: Parameters<Hook<'agent.spawn'>>[0], e: P
   }
   if (started.agentId && run && !agents.has(started.agentId)) {
     agents.set(started.agentId, run)
-    await startAgentActivity($, run.sessionId, { id: started.agentId, model: started.model, task: (e.description || e.prompt).replace(/\s+/g, ' ').trim().slice(0, 160), tokens: 0, running: true })
+    await startAgentActivity($, run.sessionId, { id: started.agentId, model: run.model || '', confirmed: false, task: (e.description || e.prompt).replace(/\s+/g, ' ').trim().slice(0, 160), tokens: 0, running: true })
   }
   else if (run) await releaseWindow($, run).catch(() => undefined)
   return started
@@ -226,7 +226,7 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
         run.duration = (run.duration ?? 0) + ended - began
       }
     }
-    if (e.agentId) await updateAgentActivity($, run.sessionId, e.agentId, row => ({ ...row, model: run.actualModel!, tokens: run.output ?? 0 }))
+    if (e.agentId) await updateAgentActivity($, run.sessionId, e.agentId, row => ({ ...row, model: run.actualModel!, confirmed: true, tokens: run.output ?? 0 }))
     else await updateMainActivity($, run.sessionId, main(true))
     return result
   } catch (error) {

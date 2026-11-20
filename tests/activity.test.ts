@@ -90,7 +90,21 @@ test('aborted native agents stop with failure instead of reporting success', asy
   const f = fixture()
   const input = { parentModel: 'claude-native', description: 'Investigate the failing test', prompt: 'details', subagentType: 'Explore' } as Parameters<Hook<'agent.spawn'>>[1]
   await executionSpawn(f.engine, input, (async () => ({ agentId: 'worker', model: 'actual-worker' })) as unknown as Parameters<Hook<'agent.spawn'>>[2])
-  expect((await readActivity(f.engine)).subagents).toMatchObject([{ id: 'worker', model: 'actual-worker', task: input.description, tokens: 0, running: true }])
+  expect((await readActivity(f.engine)).subagents).toMatchObject([{ id: 'worker', model: 'deepseek-v4.1-flash:cloud', confirmed: false, task: input.description, tokens: 0, running: true }])
   await executionComplete(f.engine, { turnId: 'worker-turn', agentId: 'worker', reason: 'aborted', isAborted: true } as Parameters<Hook<'turn.complete'>>[1], (async () => ({ text: '' })) as unknown as Parameters<Hook<'turn.complete'>>[2])
   expect((await readActivity(f.engine)).subagents).toMatchObject([{ id: 'worker', running: false, failed: true, tokens: 0 }])
+})
+
+test('worker activity distinguishes intended startup routing from the returned model', async () => {
+  const f = fixture()
+  const input = { parentModel: 'claude-native', description: 'Inspect source', prompt: 'details', subagentType: 'Explore' } as Parameters<Hook<'agent.spawn'>>[1]
+  await executionSpawn(f.engine, input, (async () => ({ agentId: 'worker-confirmed', model: 'claude-startup-alias' })) as unknown as Parameters<Hook<'agent.spawn'>>[2])
+  expect((await readActivity(f.engine)).subagents[0]).toMatchObject({ model: 'deepseek-v4.1-flash:cloud', confirmed: false })
+  const next = async function* () {
+    expect((await readActivity(f.engine)).subagents[0]?.confirmed).toBe(false)
+    yield { kind: 'text', text: 'Answer' }
+    return { turnId: 'worker-turn', index: 0, answer: 'Answer', toolUses: [], stopReason: 'end_turn', usage: { model: 'deepseek-returned-version', output_tokens: 20 } }
+  }
+  for await (const _chunk of executionStep(f.engine, { turnId: 'worker-turn', agentId: 'worker-confirmed', index: 0, model: 'claude-startup-alias', messageCount: 1 }, next as unknown as Parameters<Hook<'turn.step'>>[2])) { /* drain */ }
+  expect((await readActivity(f.engine)).subagents[0]).toMatchObject({ model: 'deepseek-returned-version', confirmed: true, tokens: 20 })
 })
