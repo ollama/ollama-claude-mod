@@ -440,6 +440,13 @@ for (const surface of ['desktop', 'terminal'] as const) {
     await ui.press({ key: 'model' })
     expect((await ui.find({ key: 'model-option-model-23' }))?.props).toMatchObject({ label: '✓ Model 23' })
     expect((await ui.find({ key: 'model-search' }))?.props).toMatchObject({ submitLabel: surface === 'terminal' ? '' : 'Search' })
+    const rowKeys = async () => (await ui.findAll({ type: 'Button' })).map(button => button.key).filter(key => key?.startsWith('model-option-'))
+    const mounted = await rowKeys()
+    expect(mounted).toHaveLength(models.length)
+    for (const offset of [6, 14, 3, 0]) {
+      await ui.redraw({ ...props, maxRows: 10, scroll: { bodyRows: 9, offset } })
+      expect(await rowKeys()).toEqual(mounted)
+    }
     expect(await ui.find({ key: 'model-options' })).toBeUndefined()
     expect(writes).toEqual([])
     await ui.press({ key: 'model-option-model-22' })
@@ -449,24 +456,33 @@ for (const surface of ['desktop', 'terminal'] as const) {
   })
 }
 
-test('large catalogs remain bounded and can be browsed without knowing a model name', async ($, on) => {
-  const models = Array.from({ length: 1000 }, (_, i) => ({ name: `model-${i}`, isCloud: false, isDecision: false, contextLength: 8192, efforts: [] }))
-  const { writes, values } = setup(on, { ...initial, models, preferences: { ...initial.preferences, full: 'model-0' } })
-  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'terminal', component: 'AbovePrompt', requestId: 'large', props })
-  await ui.press({ key: 'settings' })
-  await ui.press({ key: 'model' })
-  expect((await ui.findAll({ type: 'Button' })).filter(one => one.key?.startsWith('model-option-')).length).toBe(18)
-  for (let i = 0; i < 3; i++) await ui.press({ key: 'model-scroll-down' })
-  expect(await ui.find({ key: 'model-option-model-0' })).toBeUndefined()
-  expect((await ui.findAll({ type: 'Button' })).filter(one => one.key?.startsWith('model-option-')).length).toBe(18)
-  await ui.press({ key: 'model-scroll-up' })
-  expect(writes).toEqual([])
-  await ui.input({ key: 'model-search', text: 'model-' })
-  expect(writes).toEqual([])
-  await ui.input({ key: 'model-search', text: 'model-999' })
-  expect(values.get('preferences:ui-test:full')).toEqual({ version: 1, value: 'model-999' })
-  await ui.unmount()
-})
+for (const surface of ['desktop', 'terminal'] as const) {
+  test(`${surface}: scrolling a large catalog preserves its height and reaches both ends`, async ($, on) => {
+    const models = Array.from({ length: 1000 }, (_, i) => ({ ...initial.models[0]!, name: `model-${String(i).padStart(3, '0')}` }))
+    const { writes, values, state } = setup(on, { ...initial, models, preferences: { ...initial.preferences, full: 'model-000' } })
+    const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: 'large', props })
+    await ui.press({ key: 'settings' })
+    await ui.press({ key: 'model' })
+    const rowHeight = surface === 'desktop' ? 2 : 1
+    for (const i of [0, 35, 510, 999, 475, 0]) {
+      await ui.redraw({ ...props, scroll: { bodyRows: 20, offset: i * rowHeight } })
+      const buttons = (await ui.findAll({ type: 'Button' })).filter(one => one.key?.startsWith('model-option-'))
+      const before = Number((await ui.find({ key: 'before' }))?.props.height ?? 0)
+      const after = Number((await ui.find({ key: 'after' }))?.props.height ?? 0)
+      expect(buttons.length < 64).toBe(true)
+      expect(before + buttons.length * rowHeight + after).toBe(models.length * rowHeight)
+      expect(await ui.find({ key: `model-option-${models[i]!.name}` })).toBeDefined()
+      expect(state().openMenu).toEqual({ key: 'model' })
+    }
+    expect(writes).toEqual([])
+    await ui.input({ key: 'model-search', text: 'model-99', kind: 'change' })
+    expect(await ui.find({ key: 'model-option-model-999' })).toBeDefined()
+    expect(await ui.find({ key: 'model-results' })).toBeUndefined()
+    await ui.press({ key: 'model-option-model-999' })
+    expect(values.get('preferences:ui-test:full')).toEqual({ version: 1, value: 'model-999' })
+    await ui.unmount()
+  })
+}
 
 for (const surface of ['desktop', 'terminal'] as const) {
   test(`${surface}: model search filters while typing and saves only a chosen model`, async ($, on) => {

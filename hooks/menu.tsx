@@ -1,5 +1,4 @@
-import type { EngineInterface, Hook, RenderInput, RenderSurface } from 'claude-code'
-import { readView } from './runtime'
+import type { EngineInterface, RenderInput } from 'claude-code'
 import type { OpenMenu } from '../types'
 
 export type Menu = {
@@ -24,79 +23,51 @@ function soleMatch(options: Menu['options'], query: string) {
   return exact.length === 1 ? exact[0] : undefined
 }
 
-type ScrollWindow = { surface: RenderSurface; offset: number; columns: number; key: string; query: string; first: number; rows: number; rowGap: number; count: number; setOpen: (open: OpenMenu) => Promise<void> }
-const windows = new Map<string, ScrollWindow>()
-
-export function clearPickerWindows(surface?: RenderSurface): void {
-  for (const [id, window] of windows) if (!surface || window.surface === surface) windows.delete(id)
-}
-
-export async function scrollPicker($: EngineInterface, e: Parameters<Hook<'ui.scroll'>>[1], next: Parameters<Hook<'ui.scroll'>>[2]) {
-  const window = windows.get(e.requestId)
-  if (e.component !== 'AbovePrompt' || e.origin.kind !== 'person' || !window) return next(e)
-  if (e.pointer) {
-    const row = e.pointer.row + window.offset
-    const stride = 1 + window.rowGap
-    const footer = window.count > window.rows ? stride : 0
-    const end = e.contentRows - footer
-    const height = Math.min(window.rows, window.count) * stride - window.rowGap
-    if (e.pointer.column < 0 || e.pointer.column >= window.columns || row < end - height || row >= end) return next(e)
-  }
-  const current = (await readView($)).openMenu
-  if (windows.get(e.requestId) !== window || current?.key !== window.key || (current.query ?? '') !== window.query) return next(e)
-  const first = Math.max(0, Math.min(window.first + Math.trunc(e.by), window.count - window.rows))
-  if (first === window.first) return {}
-  window.first = first
-  await window.setOpen({ key: window.key, query: window.query, first })
-  $.ui.invalidate('ui.render')
-  // Pin the band while its model rows move. This also handles wheel events
-  // at the host's scroll boundary, so catalogs never need paging buttons.
-  return next({ ...e, offset: 0 })
-}
-
-// Keep real result buttons within the tree limit; person-origin scrolling
-// slides over the full filtered catalog, even when its name is not known.
 export function pickerMenu($: EngineInterface, e: RenderInput<'AbovePrompt'>, open: OpenMenu | undefined, menu: Menu, setOpen: (open: OpenMenu) => Promise<void>) {
   const { Box, Button, Input, Text } = $.ui.resolve(e)
   const { key, label, value, onSelect } = menu
   const isOpen = open?.key === key
   const query = isOpen ? open.query ?? '' : ''
-  const options = menu.options.filter(one => matches(one, query))
-  const selected = options.findIndex(one => one.value === value)
-  // Small overscan keeps the native band scrollable for arrow/Page keys.
+  const options = isOpen && query.trim() ? menu.options.filter(one => matches(one, query)) : menu.options
   const rowGap = menu.searchable && e.surface === 'desktop' ? 1 : 0
-  const rows = Math.max(3, Math.min(24, Math.floor((e.props.maxRows - 2) / (1 + rowGap))))
-  const first = Math.max(0, Math.min(isOpen && open.first >= 0 ? open.first : selected - Math.floor(rows / 2), options.length - rows))
-  const shown = menu.searchable ? options.slice(first, first + rows) : options
-  if (isOpen && menu.searchable) windows.set(e.requestId, { surface: e.surface, offset: e.props.scroll?.offset ?? 0, columns: e.props.bodyColumns, key, query, first, rows, rowGap, count: options.length, setOpen })
-  else if (windows.get(e.requestId)?.key === key) windows.delete(e.requestId)
-  while (windows.size > 16) windows.delete(windows.keys().next().value!)
-  const move = (by: number) => setOpen({ key, query, first: Math.max(0, Math.min(first + by, options.length - rows)) })
+  const rowHeight = 1 + rowGap
+  // Ordinary catalogs stay mounted. For large catalogs, spacers preserve the
+  // full scroll height while the host moves through a bounded set of buttons.
+  const virtual = isOpen && menu.searchable && options.length > 128
+  const viewport = Math.ceil((e.props.scroll?.bodyRows || e.props.maxRows) / rowHeight)
+  const offset = Math.floor((e.props.scroll?.offset ?? 0) / rowHeight)
+  const overscan = 16
+  const first = virtual ? Math.max(0, Math.min(offset - overscan, options.length - viewport - overscan)) : 0
+  const end = virtual ? Math.min(options.length, first + viewport + 2 * overscan) : options.length
   const pick = (choice: string) => async () => {
     await setOpen(null)
     await onSelect(choice)
   }
+  const button = (one: Menu['options'][number]) => (
+    <Button key={`${key}-option-${one.value}`} plain label={`${one.value === value ? '✓ ' : '  '}${one.label}`} onPress={pick(one.value)} />
+  )
   return (
     <Box key={`${key}-menu`} flexDirection="column" alignItems="flex-start">
       <Button key={key} plain label={`${label ? `${label}: ` : ''}${menu.options.find(one => one.value === value)?.label ?? value}${isOpen ? ' ▴' : ' ▾'}`}
-        onPress={() => setOpen(isOpen ? null : { key, first: -1 })} />
+        onPress={() => setOpen(isOpen ? null : { key })} />
       {isOpen ? (
         <Box key={`${key}-list`} flexDirection="column" flexShrink={0} paddingX={1} paddingTop={rowGap} rowGap={rowGap}>
           {menu.searchable ? <Input key={`${key}-search`} placeholder="Search models" value={query} autoFocus submitLabel={e.surface === 'terminal' ? '' : soleMatch(options, query) ? 'Use model' : 'Search'}
-            onInput={query => setOpen({ key, query, first: 0 })}
+            onInput={query => setOpen({ key, query })}
             onSubmit={text => {
               const found = menu.options.filter(one => matches(one, text))
               const choice = soleMatch(found, text)
-              return choice ? pick(choice.value)() : setOpen({ key, query: text, first: 0 })
+              return choice ? pick(choice.value)() : setOpen({ key, query: text })
             }} /> : null}
-          {options.length === 0 ? <Text dimColor>No models found</Text> : shown.map(one => (
-            <Button key={`${key}-option-${one.value}`} plain label={`${one.value === value ? '✓ ' : '  '}${one.label}`} onPress={pick(one.value)} />
-          ))}
-          {menu.searchable && options.length > rows ? <Box key={`${key}-position`} flexDirection="row" columnGap={1}>
-            <Text dimColor>{`${first + 1}–${first + shown.length} of ${options.length}`}</Text>
-            <Button key={`${key}-scroll-up`} plain hotkey="k" label="↑" onPress={() => move(-1)} />
-            <Button key={`${key}-scroll-down`} plain hotkey="j" label="↓" onPress={() => move(1)} />
-          </Box> : null}
+          {options.length === 0 ? <Text dimColor>No models found</Text> : virtual ? (
+            <Box key={`${key}-results`} flexDirection="column" alignItems="flex-start" flexShrink={0}>
+              {first > 0 ? <Box key="before" height={first * rowHeight} flexShrink={0} /> : null}
+              {options.slice(first, end).map(one => (
+                <Box key={`row-${one.value}`} height={rowHeight} flexShrink={0}>{button(one)}</Box>
+              ))}
+              {end < options.length ? <Box key="after" height={(options.length - end) * rowHeight} flexShrink={0} /> : null}
+            </Box>
+          ) : options.map(button)}
         </Box>
       ) : null}
     </Box>

@@ -122,7 +122,7 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
             options: [{ value: '', label: 'Default' }, ...efforts.map(value => ({ value, label: effortLabels[value] }))],
             onSelect: value => actions.setEffort(value ? value as Thinking : undefined) }) : null}
           {!openRow ? <Button key="advanced" plain dimColor label={`Advanced ${advanced ? '▾' : '▸'}`}
-            onPress={() => actions.setOpenMenu(advanced ? null : { key: 'advanced', first: 0 })} /> : null}
+            onPress={() => actions.setOpenMenu(advanced ? null : { key: 'advanced' })} /> : null}
           {advanced ? <Box key="settings-details" flexDirection="column" rowGap={isTerminal ? 0 : 0.5}>
             {model ? <Input key={`context-${state.endpoint}-${model}`} label="Context length" value={contextValue} submitLabel={isTerminal ? '' : 'Save'}
               onSubmit={value => value.trim() === contextValue ? undefined : actions.setContext(value)} /> : null}

@@ -13,7 +13,6 @@ import { composeRoutingContext, submitRoutingContext, refreshQueuedRoutingContex
 import { clearFinishedAgents, readActivity, resetActivity, toggleActivity } from './activity'
 import { readAppearance, refreshAppearance } from './appearance'
 import { stopPulse } from './activity-view'
-import { clearPickerWindows, scrollPicker } from './menu'
 import { dismissSummary, readSummary } from './summary'
 
 function message(error: unknown): string {
@@ -161,10 +160,8 @@ export const register: Register = on => {
     return result
   })
 
-  on('session.detach', ($, e, next) => { clearPickerWindows(e.surface); return next(e) })
 
   on('session.end', async ($, e, next) => {
-    clearPickerWindows()
     cancelSelection()
     stopPulse()
     if (e.reason === 'clear') rememberClear(e.sessionId)
@@ -244,7 +241,6 @@ export const register: Register = on => {
   on('turn.step', async function* ($, e, next) { return yield* executionStep($, e, next) })
   on('turn.complete', ($, e, next) => executionComplete($, e, next))
   on('http.fetch', ($, e, next) => executionFetch($, e, next))
-  on('ui.scroll', { component: 'AbovePrompt' }, scrollPicker)
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) {

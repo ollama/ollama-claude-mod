@@ -23,7 +23,7 @@ export type OllamaModel = {
 
 export type ModelWindow = { model?: string; endpoint?: string; maximum?: number; detected?: number; effective?: number; override?: number; source: 'cloud' | 'running' | 'parameters' | 'manual' | 'unknown' }
 
-export type OpenMenu = { key: string; first: number; query?: string } | null
+export type OpenMenu = { key: string; query?: string } | null
 
 export type MainActivity = { model: string; target: string; effort?: Thinking; tokens: number; tokensPerSecond?: number; running: boolean }
 export type SubagentActivity = { id: string; model: string; confirmed?: boolean; task: string; tokens: number; running: boolean; failed?: boolean }
