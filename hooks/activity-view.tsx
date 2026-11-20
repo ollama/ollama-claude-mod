@@ -2,19 +2,7 @@ import type { EngineInterface, RenderInput } from 'claude-code'
 import type { SubagentActivity } from '../types'
 import { claudeSvg, dotCells, dotsSvg, iconImage, llamaSvg, PULSE_FRAMES } from './icons'
 
-const families: Record<string, string> = { clef: 'clef', deepseek: 'DeepSeek', glm: 'GLM', 'gpt-oss': 'GPT-OSS', mimo: 'MiMo', minimax: 'MiniMax' }
-
-export function displayName(model: string): string {
-  if (!model) return 'Claude'
-  const claude = /^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(model)
-  if (claude) return `${claude[1]![0]!.toUpperCase()}${claude[1]!.slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}`
-  const [base = '', tag = 'latest'] = model.replace(/[:-]cloud$/, '').split(':')
-  const family = Object.keys(families).find(name => base === name || base.startsWith(`${name}-`))
-  const words = (family ? base.slice(family.length) : base).split('-').filter(Boolean)
-    .map(word => /^v\d/.test(word) ? word : word[0]!.toUpperCase() + word.slice(1))
-  const name = [...(family ? [families[family]] : []), ...words].join(' ')
-  return tag === 'latest' ? name : `${name} (${tag})`
-}
+export { displayName } from './catalog'
 
 export function tokenCount(tokens: number): string {
   return tokens < 1000 ? String(tokens) : `${(tokens / 1000).toFixed(1)}k`

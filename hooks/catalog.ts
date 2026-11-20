@@ -4,6 +4,21 @@ export const CLOUD_CATALOG = 'https://ollama.com/api/tags'
 
 export type PickerRow = { model: string; label: string; description: string }
 
+const families: Record<string, string> = { clef: 'clef', deepseek: 'DeepSeek', glm: 'GLM', 'gpt-oss': 'GPT-OSS', mimo: 'MiMo', minimax: 'MiniMax' }
+
+export function displayName(model: string, showLatest = false): string {
+  if (!model) return 'Claude'
+  const claude = /^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(model)
+  if (claude) return `${claude[1]![0]!.toUpperCase()}${claude[1]!.slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}`
+  const [base = '', tag = 'latest'] = model.replace(/[:-]cloud$/, '').split(':')
+  const family = Object.keys(families).find(name => base === name || base.startsWith(`${name}-`))
+  const words = (family ? base.slice(family.length) : base).split('-').filter(Boolean)
+    .map(word => /^v\d/.test(word) ? word : word[0]!.toUpperCase() + word.slice(1))
+  const name = [...(family ? [families[family]] : []), ...words].join(' ')
+  return tag === 'latest' && !showLatest ? name : `${name} (${tag})`
+}
+
+
 export function isChatModel(capabilities: unknown): boolean {
   return Array.isArray(capabilities) && capabilities.includes('tools') && !capabilities.includes('decision')
 }
@@ -15,15 +30,12 @@ export function isCloudModel(name: string, remoteHost?: string): boolean {
 // Bare names and :latest identify the same Ollama tag. No other suffix is
 // removed: versions, sizes, quantizations and local/cloud are distinct models.
 export function canonicalModel(name: string): string {
-  return name.replace(/:latest-cloud$/, ':cloud').replace(/:latest$/, '')
+  return name.replace(/:latest$/, '')
 }
 
 export function modelLabel(model: Pick<OllamaModel, 'name' | 'isCloud'>): string {
-  const name = model.name.replace(/(?::cloud|-cloud)$/, '').replace(/:latest$/, '')
-  const label = name.replace(/^kimi-k(\d[\w.-]*)$/i, (_, version: string) => `Kimi K${version.replace(/-pro$/, ' Pro')}`)
-    .replace(/^deepseek-v(\d[\w.-]*)$/i, (_, version: string) => `DeepSeek V${version.replace(/-flash$/, ' Flash')}`)
-    .replace(/^glm-(\d[\w.-]*)$/i, (_, version: string) => `GLM ${version.replace(/-flash$/, ' Flash')}`)
-  return `${label}${model.isCloud ? ' · Cloud' : ''}`
+  const label = displayName(model.name, model.name.endsWith(':latest-cloud'))
+  return `${label}${model.isCloud ? ' · Cloud' : ''}${recommendation(model.name) < 2 ? ' · Recommended' : ''}`
 }
 
 function recommendation(name: string): number {

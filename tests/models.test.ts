@@ -5,7 +5,7 @@ import { DEFAULT_PREFERENCES, loadPreferences, savePreference } from '../hooks/s
 import type { OllamaModel, Preferences } from '../types'
 
 const models: OllamaModel[] = [{ name: 'local-model', isCloud: false, isDecision: false, contextLength: 8192, efforts: [] }]
-const rows = [{ model: 'local-model', label: 'Ollama · local-model', description: 'Local Ollama' }]
+const rows = [{ model: 'local-model', label: 'Ollama · Local Model', description: 'Local Ollama' }]
 function config(catalog = rows): Settings {
   return { pluginConfigs: { 'ollama': { options: { modelCatalog: JSON.stringify(catalog) } } } }
 }
@@ -47,9 +47,9 @@ test('partial discovery retains model identity until a complete catalog replaces
   const incoming = [{ ...models[0]!, name: 'new-model' }]
   await refreshModelCatalog(f.engine, incoming, false)
   expect(await isOllamaModel(f.engine, 'new-model')).toBe(true)
-  expect(f.configs).toEqual([{ key: 'ollama.modelCatalog', value: JSON.stringify([...rows, { ...rows[0]!, model: 'new-model', label: 'Ollama · new-model' }]) }])
+  expect(f.configs).toEqual([{ key: 'ollama.modelCatalog', value: JSON.stringify([...rows, { ...rows[0]!, model: 'new-model', label: 'Ollama · New Model' }]) }])
   await refreshModelCatalog(f.engine, incoming, true)
-  expect(f.configs.at(-1)).toEqual({ key: 'ollama.modelCatalog', value: JSON.stringify([{ ...rows[0]!, model: 'new-model', label: 'Ollama · new-model' }]) })
+  expect(f.configs.at(-1)).toEqual({ key: 'ollama.modelCatalog', value: JSON.stringify([{ ...rows[0]!, model: 'new-model', label: 'Ollama · New Model' }]) })
 })
 
 test('native picker selection enables Full; Claude preserves active Subagents and publishes it', async () => {
