@@ -47,6 +47,8 @@ async function fail($: EngineInterface, run: Pick<Run, 'model' | 'failed' | 'fai
   run.failed = true
   const detail = status === 429 ? 'Rate limit reached. Try again later or choose another model.'
     : status === 401 || status === 403 ? 'Ollama authorization failed. Check sign-in.'
+    : status === 404 && phase === 'preparation' ? 'Ollama could not find this model. Check the model in Settings.'
+    : status === 413 ? 'The request is too large. Shorten the conversation and try again.'
     : status !== undefined && status >= 500 ? 'Ollama is unavailable. Try again later.'
     : reason
   run.failure = phase === 'connection' ? detail
@@ -54,6 +56,16 @@ async function fail($: EngineInterface, run: Pick<Run, 'model' | 'failed' | 'fai
   const model = run.model.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 200)
   if (phase === 'connection' && run.connection) invalidateStaleConnection(run.connection.base, false)
   try { $.ui.log(`Ollama failure: ${JSON.stringify({ model, phase, ...(status ? { status } : {}), reason: detail })}`, { to: 'debug' }) } catch { /* Diagnostics cannot change delivery. */ }
+  // The transcript belongs to the chat that launched the run, even if the
+  // user has since changed models or a newer turn owns the status bar.
+  if (firstFailure) {
+    try {
+      if (!run.sessionId || run.sessionId === await $.session.id()) {
+        const role = run.worker ? 'subagent' : 'request'
+        $.ui.log(`Ollama ${role} failed (${model}${status ? `, HTTP ${status}` : ''}). ${detail}`, { to: 'transcript' })
+      }
+    } catch { /* Keep the original failure when the host cannot display a notice. */ }
+  }
   if (firstFailure && run.sessionId && run.noticeRevision !== undefined) {
     const owner = run.sessionId
     const role = run.worker ? 'subagent' : 'full'
@@ -258,7 +270,7 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
     else await updateMainActivity($, run.sessionId, main(true))
     return result
   } catch (error) {
-    if (run.accepted && !run.failed) await fail($, run, 'stream', 'The response was interrupted; this request cannot be replayed.')
+    if (run.accepted && !run.failed && !next.signal?.aborted) await fail($, run, 'stream', 'The response was interrupted before it finished.')
     throw error
   } finally {
     if (!delivered) {
@@ -272,10 +284,18 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
 
 export async function executionComplete($: Parameters<Hook<'turn.complete'>>[0], e: Parameters<Hook<'turn.complete'>>[1], next: Parameters<Hook<'turn.complete'>>[2]) {
   let completed = false
-  try { const result = await next(e); completed = true; return result }
+  const run = e.agentId ? agents.get(e.agentId) : turns.get(e.turnId)
+  try {
+    if (run?.model && !run.failed && !e.isAborted) {
+      if (e.reason === 'error') await fail($, run, 'response', 'Claude Code reported an API error before the answer finished.')
+      if (e.reason === 'refusal') await fail($, run, 'refusal', 'The model declined the request.')
+    }
+    const result = await next(e)
+    completed = true
+    return result
+  }
   finally {
     if (e.agentId) {
-      const run = agents.get(e.agentId)
       if (run) {
         await updateAgentActivity($, run.sessionId, e.agentId, row => ({ ...row, running: false, failed: run.failed || run.activityFailed || !completed || e.isAborted || e.reason !== 'answer' }))
         await releaseWindow($, run).catch(() => undefined)
@@ -285,7 +305,6 @@ export async function executionComplete($: Parameters<Hook<'turn.complete'>>[0],
       agents.delete(e.agentId)
       inFlight.delete(e.agentId)
     } else {
-      const run = turns.get(e.turnId)
       if (run) {
         await updateMainActivity($, run.sessionId, { model: run.actualModel ?? (run.model || run.nativeModel), target: run.model, effort: run.activityEffort, tokens: run.output ?? 0, ...(run.duration ? { tokensPerSecond: (run.measuredOutput ?? 0) * 1000 / run.duration } : {}), running: false })
         await releaseWindow($, run).catch(() => undefined)

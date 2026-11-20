@@ -53,7 +53,7 @@ export async function loadModels($: EngineInterface, connection: Connection, for
       // Failure to save a cache must not discard a usable live catalog.
       if (receivedModels) await $.store.set(cacheKey(base), discovery.models).catch(() => undefined)
     } catch {
-      discovery = { models: before, connected: false, complete: false }
+      discovery = { models: before, connected: false, complete: false, connectionIssue: 'Could not load the Ollama model list. Open Settings → Advanced and refresh.' }
     }
     cached.set(base, { at: now, discovery })
     return discovery

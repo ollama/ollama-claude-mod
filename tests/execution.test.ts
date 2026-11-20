@@ -17,7 +17,9 @@ function fixture(mode: Preferences['mode'] = 'full', reporting = false) {
   const preferences: Preferences = { enabled: true, mode, full: 'full-model', subagent: 'worker-model' }
   const stored = new Map<string, unknown>([[`preferences:${id}`, { version: 1, value: preferences }]])
   const states = new Map<string, { value: unknown; version: number }>()
+  const logs: { text: string; to: string }[] = []
   const engine = {
+    ui: { log: (text: string, options?: { to?: string }) => logs.push({ text, to: options?.to ?? 'transcript' }) },
     session: { id: async () => sessionId, messages: async () => [{ role: 'user', content: 'hello' }, { role: 'assistant', content: [{ type: 'text', text: 'previous reply' }] }] },
     store: { get: async (key: string) => stored.get(key), set: async (key: string, value: unknown) => { stored.set(key, value) }, keys: async () => [...stored.keys()], delete: async (key: string) => { stored.delete(key) } },
     env: { get: async () => undefined },
@@ -51,7 +53,7 @@ function fixture(mode: Preferences['mode'] = 'full', reporting = false) {
     const stream = executionStep(engine, { turnId, index, model: nativeModel, messageCount: 1, ...(agentId ? { agentId } : {}) }, downstream as unknown as Parameters<Hook<'turn.step'>>[2])
     for await (const _chunk of stream) { /* drain */ }
   }
-  return { id, engine, preferences, stored, controller, sent, transport, request, step, setSessionId: (value: string) => { sessionId = value } }
+  return { id, engine, preferences, stored, controller, sent, transport, request, step, logs, setSessionId: (value: string) => { sessionId = value } }
 }
 
 test('Ollama totals combine completed main and subagent requests, include cached input, and exclude native fallback', async () => {
@@ -791,8 +793,6 @@ test('parallel workers keep their model through tool-result and inline-system co
 test('Ollama failures log only model, phase, status and a safe reason through the host', async () => {
   for (const phase of ['connection', 'preparation', 'transport', 'response', 'restriction'] as const) {
     const f = fixture()
-    const logs: { text: string; options: unknown }[] = []
-    Object.assign(f.engine, { ui: { log: (text: string, options: unknown) => logs.push({ text, options }) } })
     if (phase === 'connection') f.stored.set('connection-v1', 123)
     if (phase === 'preparation') f.engine.http.fetch = async () => ({ status: 429, ok: false, text: 'secret server body', headers: {} })
     const next = Object.assign(async (e: FetchInput) => {
@@ -814,13 +814,17 @@ test('Ollama failures log only model, phase, status and a safe reason through th
       }
     })
     expect(f.sent.length).toBe(phase === 'transport' || phase === 'response' ? 1 : 0)
-    expect(logs.length).toBe(1)
-    expect(logs[0]?.options).toEqual({ to: 'debug' })
-    const diagnostic = JSON.parse(logs[0]!.text.replace('Ollama failure: ', ''))
+    const debug = f.logs.filter(log => log.to === 'debug')
+    expect(debug).toHaveLength(1)
+    const diagnostic = JSON.parse(debug[0]!.text.replace('Ollama failure: ', ''))
     expect(diagnostic.model).toBe('full-model')
     expect(diagnostic.phase).toBe(phase === 'restriction' ? 'request' : phase === 'transport' ? 'connection' : phase)
     if (phase === 'preparation' || phase === 'response') expect(diagnostic.status).toBe(429)
-    expect(/secret|private.example|native-key|native-secret/.test(logs[0]!.text)).toBe(false)
+    const visible = f.logs.filter(log => log.to === 'transcript')
+    expect(visible).toHaveLength(1)
+    expect(visible[0]!.text).toContain('Ollama request failed (full-model')
+    expect(visible[0]!.text).toContain(diagnostic.reason)
+    expect(f.logs.some(log => /secret|private.example|native-key|native-secret/.test(log.text))).toBe(false)
   }
 })
 
@@ -831,6 +835,7 @@ test('a disconnected subagent stops at the saved address while the native main c
   const agentId = `${f.id}-worker`
   await executionSpawn(f.engine, { parentModel: 'claude-native', prompt: 'Work', description: 'Work', subagentType: 'Explore' } as Parameters<Hook<'agent.spawn'>>[1],
     (async () => ({ agentId, model: 'claude-native' })) as unknown as Parameters<Hook<'agent.spawn'>>[2])
+  await f.step(`${f.id}-newer`, 'claude-native', async () => {})
   await f.step(agentId, 'claude-native', async model => {
     const failure = await executionFetch(f.engine, f.request(model, agentId), f.transport)
     expect(failure.deny).toContain("Can't reach Ollama at 127.0.0.1:49172")
@@ -838,10 +843,29 @@ test('a disconnected subagent stops at the saved address while the native main c
     expect(await executionFetch(f.engine, f.request('claude-native', agentId), f.transport)).toEqual(failure)
   }, agentId)
   expect(f.sent).toHaveLength(0)
+  await executionComplete(f.engine, { agentId, turnId: agentId, answer: '', durationMs: 1, isAborted: false, reason: 'error' },
+    (async () => ({})) as unknown as Parameters<Hook<'turn.complete'>>[2])
+  const visible = f.logs.filter(log => log.to === 'transcript')
+  expect(visible).toHaveLength(1)
+  expect(visible[0]!.text).toContain("Ollama subagent failed (worker-model). Can't reach Ollama at 127.0.0.1:49172")
   await f.step(`${f.id}-main`, 'claude-native', async model => {
     expect(await executionFetch(f.engine, f.request(model), f.transport)).toBe(ok)
   })
   expect(f.sent.map(request => request.url)).toEqual(['https://api.anthropic.com/v1/messages'])
+})
+
+test('completion-only errors surface for Ollama while cancellation and native turns stay quiet', async () => {
+  for (const [mode, reason] of [['full', 'error'], ['full', 'aborted'], ['subagent', 'error']] as const) {
+    const f = fixture(mode)
+    await f.step(f.id, 'claude-native', async () => {})
+    await executionComplete(f.engine, { turnId: f.id, answer: '', durationMs: 1, isAborted: reason === 'aborted', reason },
+      (async () => ({})) as unknown as Parameters<Hook<'turn.complete'>>[2])
+    const visible = f.logs.filter(log => log.to === 'transcript')
+    if (mode === 'full' && reason === 'error') {
+      expect(visible).toHaveLength(1)
+      expect(visible[0]!.text).toContain('Claude Code reported an API error')
+    } else expect(visible).toHaveLength(0)
+  }
 })
 
 test('a retry after Ollama restarts clears its connection warning and keeps other notices', async () => {
@@ -940,5 +964,6 @@ test('late failures cannot overwrite a new chat, newer turn, model choice or ret
     release()
     await pending
     expect((await readView(f.engine)).notice).toBe(before)
+    expect(f.logs.filter(log => log.to === 'transcript')).toHaveLength(changed === 'chat' ? 0 : 1)
   }
 })

@@ -148,6 +148,19 @@ test('connection is disclosed on demand and saves only on Enter', async ($, on) 
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {
+  test(`${surface} shows an invalid saved address when a chat opens`, async ($, on) => {
+    const f = setup(on)
+    const id = `invalid-address-${surface}`
+    f.session(id)
+    f.values.set('connection-v1', 123)
+    on('classic.SessionStart', () => ({}))
+    await $.classic.SessionStart({ source: 'startup', session_id: id })
+    const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: id, props })
+    expect(await ui.find({ type: 'Text', text: 'The saved Ollama address is invalid. Enter the address in Settings → Advanced.' })).toBeDefined()
+    expect(f.values.get('connection-v1')).toBe(123)
+    await ui.unmount()
+  })
+
   test(`${surface} shows the failed address and clears the warning after the address is fixed`, async ($, on) => {
     const fixture = setup(on, { ...initial, connected: false, settingsOpen: true })
     fixture.http(() => ({ deny: 'Connection refused' }))

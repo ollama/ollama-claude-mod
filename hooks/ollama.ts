@@ -22,7 +22,7 @@ export class OllamaConnectionError extends Error {
 export async function getConnection($: EngineInterface): Promise<Connection> {
   const saved = await $.store.get(CONNECTION_KEY)
   if (saved !== undefined && (typeof saved !== 'string' || !saved)) {
-    throw new Error('The saved Ollama address needs attention.')
+    throw new Error('The saved Ollama address is invalid. Enter the address in Settings → Advanced.')
   }
   const base = connectionAddress(saved ?? await $.env.get('OLLAMA_HOST') ?? '')
   // Existing cloud credentials are read from the environment only. They are

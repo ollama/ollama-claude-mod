@@ -50,7 +50,7 @@ async function refresh($: EngineInterface, requested = false, ifStale = false): 
     }
   } catch (error) {
     if (version !== refreshVersion || await $.session.id() !== owner) return
-    await updateView($, current => ({ ...current, connected: false, connectionIssue: undefined, notice: requested ? message(error) : current.notice }))
+    await updateView($, current => ({ ...current, connected: false, connectionIssue: message(error), notice: requested ? '' : current.notice }))
   }
 }
 
