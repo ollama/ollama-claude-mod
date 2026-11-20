@@ -1,6 +1,6 @@
 {
   "name": "ollama",
-  "version": "0.1.36",
+  "version": "0.2.0-111926",
   "private": true,
   "type": "module",
   "scripts": {
