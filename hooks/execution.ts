@@ -1,6 +1,6 @@
 import type { EngineInterface, Hook, HttpInit } from 'claude-code'
 import type { Thinking } from '../types'
-import { getPreferences } from './runtime'
+import { getPreferences, readView, updateView } from './runtime'
 import { getConnection, prepareRequest, OllamaRequestError } from './ollama'
 import type { Connection } from './ollama'
 import { toOllamaBody, wholeRequest, withoutUnsignedThinking } from './route'
@@ -18,6 +18,9 @@ type Run = {
   nativeModel: string
   failed: boolean
   failure?: string
+  noticeRevision?: number
+  previousNotice?: string
+  worker?: boolean
   captured: boolean
   accepted: boolean
   lastRequest?: Body
@@ -32,17 +35,36 @@ const turns = new Map<string, Run>()
 const agents = new Map<string, Run>()
 const inFlight = new Map<string, Run>()
 const history = new Map<string, Body>()
+const noticeRevisions = new Map<string, number>()
 const MAIN = 'main'
 const CHOOSE_NATIVE = 'Choose a Claude model with /model for native requests.'
 
-function fail($: EngineInterface, run: Pick<Run, 'model' | 'failed' | 'failure'>, phase: string, reason: string, status?: number) {
+async function fail($: EngineInterface, run: Pick<Run, 'model' | 'failed' | 'failure'> & Partial<Run>, phase: string, reason: string, status?: number) {
+  const firstFailure = !run.failed
   run.failed = true
   const detail = status === 429 ? 'Rate limit reached. Try again later or choose another model.'
     : status === 401 || status === 403 ? 'Ollama authorization failed. Check sign-in.'
     : status !== undefined && status >= 500 ? 'Ollama is unavailable. Try again later.'
     : reason
   run.failure = `Ollama ${phase} failed${status ? ` (HTTP ${status})` : ''}: ${detail} Change model with /model or Ollama settings, then start a new turn.`
-  try { $.ui.log(`Ollama failure: ${JSON.stringify({ model: run.model.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 200), phase, ...(status ? { status } : {}), reason: detail })}`, { to: 'debug' }) } catch { /* Diagnostics cannot change delivery. */ }
+  const model = run.model.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 200)
+  try { $.ui.log(`Ollama failure: ${JSON.stringify({ model, phase, ...(status ? { status } : {}), reason: detail })}`, { to: 'debug' }) } catch { /* Diagnostics cannot change delivery. */ }
+  if (firstFailure && run.sessionId && run.noticeRevision !== undefined) {
+    const owner = run.sessionId
+    const role = run.worker ? 'subagent' : 'full'
+    const effort = run.worker ? 'subagentEffort' : 'fullEffort'
+    try {
+      const preferences = await getPreferences($)
+      if (owner === await $.session.id() && (noticeRevisions.get(owner) ?? 0) === run.noticeRevision &&
+          preferences.enabled && (run.worker || preferences.mode === 'full') && preferences[role] === run.model && preferences[effort] === run.effort) {
+        await updateView($, current => current.owner === owner && (noticeRevisions.get(owner) ?? 0) === run.noticeRevision &&
+          current.notice === run.previousNotice && current.preferences.enabled &&
+          (run.worker || current.preferences.mode === 'full') && current.preferences[role] === run.model && current.preferences[effort] === run.effort && current.selection?.status !== 'pending'
+          ? { ...current, notice: `Ollama ${model} · ${phase}${status ? ` · HTTP ${status}` : ''}: ${detail} Change model with /model or Ollama settings.` }
+          : current)
+      }
+    } catch { /* A notice must not replace or hide the original request failure. */ }
+  }
   return { deny: run.failure }
 }
 
@@ -109,14 +131,15 @@ async function snapshot($: EngineInterface, nativeModel: string, worker: boolean
   const enabled = preferences.enabled && (worker || preferences.mode === 'full')
   const model = enabled ? preferences[worker ? 'subagent' : 'full'] : ''
   const effort = worker ? preferences.subagentEffort : preferences.fullEffort
-  const run: Run = { sessionId, nativeModel, model, effort, failed: false, captured: false, accepted: false }
+  const previousNotice = (await readView($).catch(() => undefined))?.notice
+  const run: Run = { sessionId, nativeModel, model, effort, failed: false, captured: false, accepted: false, worker, previousNotice, noticeRevision: noticeRevisions.get(sessionId) ?? 0 }
   if (model) {
     try {
       run.connection = { ...await getConnection($) }
       if (sessionId !== await $.session.id()) throw new Error('Chat changed while capturing the connection.')
       await captureWindow($, run, run.connection, model).catch(() => undefined)
     }
-    catch { fail($, run, 'connection', 'Check the Ollama address and sign-in.') }
+    catch { await fail($, run, 'connection', 'Check the Ollama address and sign-in.') }
   }
   return run
 }
@@ -155,6 +178,8 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
   const loop = e.agentId ?? MAIN
   let run = e.agentId ? agents.get(e.agentId) : turns.get(e.turnId)
   if (!run && !e.agentId) {
+    const owner = await $.session.id()
+    noticeRevisions.set(owner, (noticeRevisions.get(owner) ?? 0) + 1)
     run = await snapshot($, e.model, false)
     if (run) turns.set(e.turnId, run)
   }
@@ -205,7 +230,7 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
     else await updateMainActivity($, run.sessionId, main(true))
     return result
   } catch (error) {
-    if (run.accepted && !run.failed) fail($, run, 'stream', 'The response was interrupted; this request cannot be replayed.')
+    if (run.accepted && !run.failed) await fail($, run, 'stream', 'The response was interrupted; this request cannot be replayed.')
     throw error
   } finally {
     if (!delivered) {
@@ -394,7 +419,7 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   if (next.signal.aborted) return response
   if (!response.value) {
     // Preserve a host denial and prevent a retry from bypassing it.
-    run.failed = true
+    await fail($, run, 'host', 'The host blocked this request.')
     run.failure = response.deny ?? 'The host stopped this request. Start a new turn.'
     return response
   }

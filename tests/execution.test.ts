@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { EngineInterface, Hook, TurnUsage } from 'claude-code'
 import type { Preferences } from '../hooks/settings'
 import { executionComplete, executionFetch, executionSpawn, executionStep } from '../hooks/execution'
+import { readView, updateView } from '../hooks/runtime'
 import { readActivity, resetActivity } from '../hooks/activity'
 
 // Direct hook fixtures exercise the local routing decisions. They do not claim
@@ -804,5 +805,61 @@ test('unsupported threaded requests and malformed bodies never leak to native in
       expect(result.deny?.includes('/model')).toBe(true)
     })
     expect(f.sent.length).toBe(0)
+  }
+})
+
+
+test('routed failures publish one safe model-specific notice while retaining the original failure', async () => {
+  for (const phase of ['response', 'host', 'stream'] as const) {
+    const f = fixture('full', true)
+    const original = new Error('secret interrupted stream')
+    const denied = { deny: 'secret host denial' }
+    const next = Object.assign(async () => phase === 'host' ? denied : phase === 'stream' ? ok : { value: { ...ok.value, status: 404, ok: false, text: 'secret response body' } },
+      { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
+    let caught: unknown
+    let notice = ''
+    try {
+      await f.step(f.id, 'claude-native', async model => {
+        const result = await executionFetch(f.engine, f.request(model), next)
+        if (phase === 'stream') throw original
+        if (phase === 'host') expect(result).toBe(denied)
+        else expect(result.deny?.includes('HTTP 404')).toBe(true)
+        notice = (await readView(f.engine)).notice
+        await updateView(f.engine, state => ({ ...state, notice: 'Retrying now' }))
+        await executionFetch(f.engine, f.request(model), next)
+        expect((await readView(f.engine)).notice).toBe('Retrying now')
+      })
+    } catch (error) { caught = error }
+    if (phase === 'stream') {
+      expect(caught).toBe(original)
+      notice = (await readView(f.engine)).notice
+    }
+    expect(notice.includes('full-model')).toBe(true)
+    expect(notice.includes(phase)).toBe(true)
+    if (phase === 'response') expect(notice.includes('HTTP 404')).toBe(true)
+    expect(notice.includes('/model')).toBe(true)
+    expect(notice.includes('secret')).toBe(false)
+  }
+})
+
+test('late failures cannot overwrite a new chat, newer turn, model choice or retry notice', async () => {
+  for (const changed of ['chat', 'turn', 'model', 'notice']) {
+    const f = fixture('full', true)
+    let release!: () => void
+    let reached!: () => void
+    const ready = new Promise<void>(resolve => { reached = resolve })
+    const wait = new Promise<void>(resolve => { release = resolve })
+    const next = Object.assign(async () => { reached(); await wait; return { value: { ...ok.value, status: 404, ok: false } } },
+      { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
+    const pending = f.step(f.id, 'claude-native', async model => { await executionFetch(f.engine, f.request(model), next) })
+    await ready
+    if (changed === 'chat') f.setSessionId(`${f.id}-new`)
+    if (changed === 'turn') await f.step(`${f.id}-new`, 'claude-native', async () => {})
+    if (changed === 'model') f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, full: 'different-model' } })
+    if (changed === 'notice') await updateView(f.engine, state => ({ ...state, notice: 'Retrying now' }))
+    const before = (await readView(f.engine)).notice
+    release()
+    await pending
+    expect((await readView(f.engine)).notice).toBe(before)
   }
 })
