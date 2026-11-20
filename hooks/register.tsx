@@ -10,7 +10,7 @@ import { isCurrentMainSwitch, modelSwitched, preserveNativeStartup, refreshModel
 import { cancelSelection, confirmSelection, isOwnSelection, scheduleSelection, selectModel } from './selection'
 import { refreshConfiguredWindow, resetWindows, saveModelWindow } from './window'
 import { composeRoutingContext, submitRoutingContext, refreshQueuedRoutingContext } from './context'
-import { readActivity, resetActivity, toggleActivity } from './activity'
+import { clearFinishedAgents, readActivity, resetActivity, toggleActivity } from './activity'
 import { readAppearance, refreshAppearance } from './appearance'
 import { stopPulse } from './activity-view'
 import { clearPickerWindows, scrollPicker } from './menu'
@@ -229,10 +229,12 @@ export const register: Register = on => {
 
   on('prompt.compose', ($, e, next) => composeRoutingContext($, e, next))
   on('prompt.submit', async ($, e, next) => {
-    if (await $.session.id() !== refreshedSession) await refresh($).catch(() => undefined)
+    const owner = await $.session.id()
+    if (owner !== refreshedSession) await refresh($).catch(() => undefined)
     const userMessage = !e.isMeta && !e.command && (['composer', 'bridge', 'sdk'].includes(e.origin.kind) || e.origin.kind === 'plugin' && e.origin.asUser)
     const summary = userMessage ? await readSummary($).catch(() => undefined) : undefined
     const result = await submitRoutingContext($, e, next)
+    if (result.drop === undefined && userMessage) await clearFinishedAgents($, owner)
     if (result.drop === undefined && summary) await dismissSummary($, summary).catch(() => undefined)
     return result
   })

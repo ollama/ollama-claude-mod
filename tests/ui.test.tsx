@@ -582,6 +582,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     setup(on, { ...initial, activity: {
       owner: 'ui-test', hidden: true, subagents: Array.from({ length: 5 }, (_, i) => ({ id: String(i), model: 'second', task: `Task ${i}`, tokens: 12, running: false })),
     } })
+    on('prompt.submit', (_, e) => ({ text: e.text }))
     const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: 'finished-workers', props })
     expect((await ui.find({ key: 'subagents-toggle' }))?.props.label).toBe('5 subagents ✓ ▸')
     expect(await ui.find({ key: 'subagent-0' })).toBeUndefined()
@@ -589,6 +590,8 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect((await ui.find({ key: 'subagents-toggle' }))?.props.label).toBe('5 subagents ✓ ▾')
     expect(await ui.find({ key: 'subagent-0' })).toBeDefined()
     expect(await ui.find({ key: 'subagent-4' })).toBeDefined()
+    await $.prompt.submit({ text: 'Next question', wait: false, origin: { kind: 'composer' } })
+    expect(await ui.find({ key: 'subagents-toggle' })).toBeUndefined()
     await ui.unmount()
   })
 

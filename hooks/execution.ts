@@ -219,7 +219,7 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
   const activityRun = run
   run.activityEffort = routed ? run.effort ?? (typeof e.effort === 'string' ? e.effort : undefined) : typeof e.effort === 'string' ? e.effort : undefined
   const main = (running: boolean) => ({ model: activityRun.actualModel ?? model, target: activityRun.model, effort: activityRun.activityEffort, tokens: activityRun.output ?? 0, ...(activityRun.duration ? { tokensPerSecond: (activityRun.measuredOutput ?? 0) * 1000 / activityRun.duration } : {}), running })
-  if (!e.agentId) await startMainActivity($, run.sessionId, main(true), e.index === 0)
+  if (!e.agentId) await startMainActivity($, run.sessionId, main(true))
   else await updateAgentActivity($, run.sessionId, e.agentId, row => ({ ...row, model, running: true, failed: undefined }))
   let firstOutput: Promise<number | undefined> | undefined
   let delivered = false

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { EngineInterface, Hook } from 'claude-code'
-import { readActivity, resetActivity, startAgentActivity, startMainActivity, toggleActivity, updateAgentActivity, updateMainActivity } from '../hooks/activity'
+import { clearFinishedAgents, readActivity, resetActivity, startAgentActivity, startMainActivity, toggleActivity, updateAgentActivity, updateMainActivity } from '../hooks/activity'
 import { executionComplete, executionSpawn, executionStep } from '../hooks/execution'
 import { DEFAULT_PREFERENCES } from '../hooks/settings'
 
@@ -39,7 +39,7 @@ test('activity isolates chat owners and ignores stale result and visibility call
   f.switchOwner()
   expect((await readActivity(f.engine)).subagents).toEqual([])
   await resetActivity(f.engine, f.owner())
-  await startMainActivity(f.engine, f.owner(), { model: 'new', target: '', tokens: 0, running: true }, true)
+  await startMainActivity(f.engine, f.owner(), { model: 'new', target: '', tokens: 0, running: true })
   await updateAgentActivity(f.engine, old, 'old', row => ({ ...row, tokens: 99 }))
   await updateMainActivity(f.engine, old, { model: 'old', target: '', tokens: 99, running: false })
   await resetActivity(f.engine, old)
@@ -47,13 +47,15 @@ test('activity isolates chat owners and ignores stale result and visibility call
   expect(await readActivity(f.engine)).toMatchObject({ owner: f.owner(), hidden: false, main: { model: 'new', tokens: 0 }, subagents: [] })
 })
 
-test('new turns retain running workers, clear completed rows, and bound retained activity', async () => {
+test('automatic turns preserve agent results and the next user message clears only finished work', async () => {
   const f = fixture()
   await resetActivity(f.engine, f.owner())
   await startAgentActivity(f.engine, f.owner(), { id: 'background', task: 'working', model: 'worker', tokens: 12, running: true })
   await startAgentActivity(f.engine, f.owner(), { id: 'done', task: 'finished', model: 'worker', tokens: 34, running: false })
   await toggleActivity(f.engine, f.owner())
-  await startMainActivity(f.engine, f.owner(), { model: 'native', target: '', tokens: 0, running: true }, true)
+  await startMainActivity(f.engine, f.owner(), { model: 'native', target: '', tokens: 0, running: true })
+  expect((await readActivity(f.engine)).subagents).toHaveLength(2)
+  await clearFinishedAgents(f.engine, f.owner())
   expect(await readActivity(f.engine)).toMatchObject({ hidden: true, subagents: [{ id: 'background', tokens: 12 }] })
   for (let index = 0; index < 40; index++) await startAgentActivity(f.engine, f.owner(), { id: `worker-${index}`, task: 'task', model: 'worker', tokens: 0, running: true })
   expect((await readActivity(f.engine)).subagents.length).toBe(24)

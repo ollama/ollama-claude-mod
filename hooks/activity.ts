@@ -38,8 +38,12 @@ export async function toggleActivity($: EngineInterface, owner: string): Promise
   await change($, owner, state => ({ ...state, hidden: !state.hidden }))
 }
 
-export async function startMainActivity($: EngineInterface, owner: string, main: MainActivity, fresh: boolean): Promise<void> {
-  await change($, owner, state => ({ ...state, main, subagents: fresh ? state.subagents.filter(row => row.running) : state.subagents }), true)
+export async function clearFinishedAgents($: EngineInterface, owner: string): Promise<void> {
+  await change($, owner, state => ({ ...state, subagents: state.subagents.filter(row => row.running) }))
+}
+
+export async function startMainActivity($: EngineInterface, owner: string, main: MainActivity): Promise<void> {
+  await change($, owner, state => ({ ...state, main }), true)
 }
 
 export async function startAgentActivity($: EngineInterface, owner: string, row: SubagentActivity): Promise<void> {
