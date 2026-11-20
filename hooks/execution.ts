@@ -171,6 +171,20 @@ export async function executionSpawn($: Parameters<Hook<'agent.spawn'>>[0], e: P
   return started
 }
 
+async function* observeFirstOutput(stream: ReturnType<Parameters<Hook<'turn.step'>>[2]>, start: () => void) {
+  for await (const chunk of stream) {
+    const output = (chunk.kind === 'text' || chunk.kind === 'thinking') ? chunk.text
+      : chunk.kind === 'tool' ? chunk.name : chunk.kind === 'input' ? chunk.json : undefined
+    if (output) {
+      start()
+      yield chunk
+      return yield* stream
+    }
+    yield chunk
+  }
+  return await stream.result
+}
+
 export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Parameters<Hook<'turn.step'>>[1], next: Parameters<Hook<'turn.step'>>[2]) {
   // A queued native /model command produces its own host result. Cancel it
   // before inference so that result cannot replace this turn's error/output.
@@ -207,14 +221,16 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
   const main = (running: boolean) => ({ model: activityRun.actualModel ?? model, target: activityRun.model, effort: activityRun.activityEffort, tokens: activityRun.output ?? 0, ...(activityRun.duration ? { tokensPerSecond: (activityRun.measuredOutput ?? 0) * 1000 / activityRun.duration } : {}), running })
   if (!e.agentId) await startMainActivity($, run.sessionId, main(true), e.index === 0)
   else await updateAgentActivity($, run.sessionId, e.agentId, row => ({ ...row, model, running: true, failed: undefined }))
-  const began = await activityTime($)
+  let firstOutput: Promise<number | undefined> | undefined
   let delivered = false
   try {
     // No catch/retry around this stream: an error after delivery may follow a
     // tool call. Retrying here could execute it twice.
-    const result = yield* next({ ...e, model, ...(effort ? { effort } : {}) })
+    const stream = next({ ...e, model, ...(effort ? { effort } : {}) })
+    const result = e.agentId ? yield* stream : yield* observeFirstOutput(stream, () => { firstOutput = activityTime($) })
     delivered = true
-    const ended = await activityTime($)
+    const ended = firstOutput && await activityTime($)
+    const began = await firstOutput
     if (run.accepted && !run.failed) await recordOllamaUsage($, run.sessionId, result.usage)
     run.actualModel = result.usage?.model ?? model
     if (run.failed && routed) run.activityEffort = undefined

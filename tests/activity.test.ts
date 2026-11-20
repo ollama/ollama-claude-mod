@@ -8,6 +8,7 @@ let sequence = 0
 function fixture() {
   let owner = `activity-${++sequence}`
   let time = 0
+  let clockReads = 0
   const states = new Map<string, { value: unknown; version: number }>()
   const preferences = { ...DEFAULT_PREFERENCES, fullEffort: 'high' }
   const engine = {
@@ -22,12 +23,12 @@ function fixture() {
         return { isSet: true, version: version + 1 }
       },
     },
-    clock: { now: async () => time },
+    clock: { now: async () => { clockReads++; return time } },
     settings: { read: async () => ({}) },
     store: { get: async (key: string) => key === `preferences:${owner}` ? { version: 1, value: preferences } : undefined, set: async () => { throw new Error('Unexpected persistent write') }, delete: async () => {}, keys: async () => [] },
     env: { get: async () => undefined },
   } as unknown as EngineInterface
-  return { engine, owner: () => owner, switchOwner: () => { owner = `activity-${++sequence}` }, advance: (ms: number) => { time += ms } }
+  return { engine, owner: () => owner, switchOwner: () => { owner = `activity-${++sequence}` }, advance: (ms: number) => { time += ms }, clockReads: () => clockReads }
 }
 
 test('activity isolates chat owners and ignores stale result and visibility callbacks', async () => {
@@ -83,13 +84,17 @@ test('five concurrent workers fold after the last success, reopen on demand, and
   expect((await readActivity(f.engine)).hidden).toBe(false)
 })
 
-test('execution counts confirmed output and excludes time between model steps', async () => {
+test('the main rate skips queues and time between steps and samples the clock twice per stream', async () => {
   const f = fixture()
   const turnId = f.owner()
   async function step(index: number, output: number, duration: number) {
     const next = async function* () {
       expect((await readActivity(f.engine)).main?.tokens).toBe(index === 0 ? 0 : 100)
-      yield { kind: 'text', text: 'No estimated counts' }
+      yield { kind: 'engine', ref: 1 }
+      f.advance(4000)
+      if (index === 0) yield { kind: 'tool', index: 0, id: 'read', name: 'Read' }
+      else yield { kind: 'text', index: 0, text: 'Answer' }
+      for (let n = 0; n < 100; n++) yield index === 0 ? { kind: 'input', index: 0, json: ' ' } : { kind: 'text', index: 0, text: '.' }
       f.advance(duration)
       return { turnId, index, answer: 'done', toolUses: [], stopReason: 'end_turn', usage: { model: 'actual-native', output_tokens: output } }
     }
@@ -100,9 +105,23 @@ test('execution counts confirmed output and excludes time between model steps', 
   f.advance(9000)
   await step(1, 100, 1000)
   expect((await readActivity(f.engine)).main).toMatchObject({ model: 'actual-native', target: '', effort: 'medium', tokens: 200, tokensPerSecond: 100, running: true })
+  expect(f.clockReads()).toBe(4)
   await executionComplete(f.engine, { turnId, reason: 'answer', isAborted: false } as Parameters<Hook<'turn.complete'>>[1], (async () => ({ text: '' })) as unknown as Parameters<Hook<'turn.complete'>>[2])
   expect((await readActivity(f.engine)).main?.running).toBe(false)
   expect((await readActivity(f.engine)).main?.effort).toBe('medium')
+})
+
+test('a stream without model output preserves its result and never starts a speed timer', async () => {
+  const f = fixture()
+  const turnId = f.owner()
+  const result = { turnId, index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: { model: 'native', output_tokens: 0 } }
+  const envelope = { kind: 'engine', ref: 100 }
+  const next = () => Object.assign((async function* () { yield envelope; return result })(), { result: Promise.resolve(result) })
+  const stream = executionStep(f.engine, { turnId, index: 0, model: 'claude-native', messageCount: 1 }, next as unknown as Parameters<Hook<'turn.step'>>[2])
+  expect(await stream.next()).toEqual({ value: envelope, done: false })
+  expect(await stream.next()).toEqual({ value: result, done: true })
+  expect((await readActivity(f.engine)).main?.tokensPerSecond).toBeUndefined()
+  expect(f.clockReads()).toBe(0)
 })
 
 test('a broken step stops activity and preserves its error', async () => {
@@ -138,4 +157,5 @@ test('worker activity distinguishes intended startup routing from the returned m
   }
   for await (const _chunk of executionStep(f.engine, { turnId: 'worker-turn', agentId: 'worker-confirmed', index: 0, model: 'claude-startup-alias', messageCount: 1 }, next as unknown as Parameters<Hook<'turn.step'>>[2])) { /* drain */ }
   expect((await readActivity(f.engine)).subagents[0]).toMatchObject({ model: 'deepseek-returned-version', confirmed: true, tokens: 20 })
+  expect(f.clockReads()).toBe(0)
 })

@@ -45,6 +45,7 @@ function fixture(mode: Preferences['mode'] = 'full', reporting = false) {
   async function step(turnId: string, nativeModel: string, action: (model: string) => Promise<void>, agentId?: string, index = 0, usage?: TurnUsage) {
     const downstream = async function* (e: { model: string }) {
       await action(e.model)
+      yield { kind: 'text', index: 0, text: 'done' }
       return { turnId, index, answer: 'done', toolUses: [], stopReason: 'end_turn' as const, usage }
     }
     const stream = executionStep(engine, { turnId, index, model: nativeModel, messageCount: 1, ...(agentId ? { agentId } : {}) }, downstream as unknown as Parameters<Hook<'turn.step'>>[2])
@@ -86,8 +87,12 @@ test('a thinking-only Ollama response counts its reported output once in both to
   const usage: TurnUsage = { model: 'full-model', input_tokens: 42, output_tokens: 16, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
   const next = async function* (e: { model: string }) {
     await executionFetch(engine, f.request(e.model), f.transport)
+    now = 10000
+    yield { kind: 'engine', ref: 1 }
+    yield { kind: 'text', index: 0, text: '' }
+    now += 3000
     yield { kind: 'thinking', index: 0, text: 'Working it out' }
-    now = 2000
+    now += 2000
     yield { kind: 'stop', stopReason: 'max_tokens', usage }
     return { turnId, index: 0, answer: '', toolUses: [], stopReason: 'max_tokens', usage }
   }
