@@ -249,7 +249,7 @@ export async function executionComplete($: Parameters<Hook<'turn.complete'>>[0],
     if (e.agentId) {
       const run = agents.get(e.agentId)
       if (run) {
-        await updateAgentActivity($, run.sessionId, e.agentId, row => ({ ...row, running: false, failed: run.activityFailed || !completed || e.isAborted || e.reason !== 'answer' }))
+        await updateAgentActivity($, run.sessionId, e.agentId, row => ({ ...row, running: false, failed: run.failed || run.activityFailed || !completed || e.isAborted || e.reason !== 'answer' }))
         await releaseWindow($, run).catch(() => undefined)
         history.delete(historyKey(run, e.agentId))
         void $.store.delete(templateKey(run, e.agentId)).catch(() => undefined)

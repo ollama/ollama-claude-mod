@@ -14,7 +14,13 @@ function fixture() {
     session: { id: async () => owner },
     state: {
       get: async (ref: unknown) => states.get(JSON.stringify(ref)) ?? { value: undefined, version: 0 },
-      set: async (ref: unknown, value: unknown) => { const version = (states.get(JSON.stringify(ref))?.version ?? 0) + 1; states.set(JSON.stringify(ref), { value, version }); return { isSet: true, version } },
+      set: async (ref: unknown, value: unknown, options?: { ifVersion?: number }) => {
+        const key = JSON.stringify(ref)
+        const version = states.get(key)?.version ?? 0
+        if (options?.ifVersion !== undefined && options.ifVersion !== version) return { isSet: false, version }
+        states.set(key, { value, version: version + 1 })
+        return { isSet: true, version: version + 1 }
+      },
     },
     clock: { now: async () => time },
     settings: { read: async () => ({}) },
@@ -50,6 +56,31 @@ test('new turns retain running workers, clear completed rows, and bound retained
   expect(await readActivity(f.engine)).toMatchObject({ hidden: true, subagents: [{ id: 'background', tokens: 12 }] })
   for (let index = 0; index < 40; index++) await startAgentActivity(f.engine, f.owner(), { id: `worker-${index}`, task: 'task', model: 'worker', tokens: 0, running: true })
   expect((await readActivity(f.engine)).subagents.length).toBe(24)
+})
+
+test('five concurrent workers fold after the last success, reopen on demand, and reveal a failure', async () => {
+  const f = fixture()
+  const start = (id: string) => startAgentActivity(f.engine, f.owner(), { id, task: id, model: 'worker', tokens: 0, running: true })
+  const finish = (id: string, failed = false) => updateAgentActivity(f.engine, f.owner(), id, row => ({ ...row, running: false, failed }))
+  const ids = ['a', 'b', 'c', 'd', 'e']
+  await Promise.all(ids.map(start))
+  expect((await readActivity(f.engine)).subagents).toHaveLength(5)
+  await Promise.all(ids.slice(0, 4).map(id => finish(id)))
+  expect((await readActivity(f.engine)).hidden).toBe(false)
+  await finish('e')
+  expect((await readActivity(f.engine)).hidden).toBe(true)
+  await toggleActivity(f.engine, f.owner())
+  await finish('e')
+  expect((await readActivity(f.engine)).hidden).toBe(false)
+  await toggleActivity(f.engine, f.owner())
+  await start('f')
+  expect((await readActivity(f.engine)).hidden).toBe(false)
+  await toggleActivity(f.engine, f.owner())
+  await start('g')
+  expect((await readActivity(f.engine)).hidden).toBe(true)
+  await finish('f', true)
+  await finish('g')
+  expect((await readActivity(f.engine)).hidden).toBe(false)
 })
 
 test('execution counts confirmed output and excludes time between model steps', async () => {

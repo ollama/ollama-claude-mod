@@ -8,14 +8,15 @@ export function tokenCount(tokens: number): string {
   return tokens < 1000 ? String(tokens) : `${(tokens / 1000).toFixed(1)}k`
 }
 
-// The overflow line occupies the last available row. Running work takes priority,
-// followed by the most recently finished work, all in original start order.
+// Reserve one row for overflow. Keep failures and running work visible first.
 export function shownSubagents(rows: SubagentActivity[], limit = 5): SubagentActivity[] {
   if (rows.length <= limit) return rows
   const available = Math.max(0, limit - 1)
-  const running = rows.filter(row => row.running).slice(0, available)
-  const done = available > running.length ? rows.filter(row => !row.running).slice(-(available - running.length)) : []
-  const visible = [...running, ...done]
+  const failed = rows.filter(row => row.failed).slice(0, available)
+  const running = rows.filter(row => row.running && !row.failed).slice(0, available - failed.length)
+  const slots = available - failed.length - running.length
+  const done = slots > 0 ? rows.filter(row => !row.running && !row.failed).slice(-slots) : []
+  const visible = [...failed, ...running, ...done]
   return rows.filter(row => visible.includes(row))
 }
 

@@ -578,6 +578,20 @@ for (const surface of ['desktop', 'terminal'] as const) {
     await ui.unmount()
   })
 
+  test(`${surface}: five completed agents share a single disclosure and can be inspected`, async ($, on) => {
+    setup(on, { ...initial, activity: {
+      owner: 'ui-test', hidden: true, subagents: Array.from({ length: 5 }, (_, i) => ({ id: String(i), model: 'second', task: `Task ${i}`, tokens: 12, running: false })),
+    } })
+    const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: 'finished-workers', props })
+    expect((await ui.find({ key: 'subagents-toggle' }))?.props.label).toBe('5 subagents ✓ ▸')
+    expect(await ui.find({ key: 'subagent-0' })).toBeUndefined()
+    await ui.press({ key: 'subagents-toggle' })
+    expect((await ui.find({ key: 'subagents-toggle' }))?.props.label).toBe('5 subagents ✓ ▾')
+    expect(await ui.find({ key: 'subagent-0' })).toBeDefined()
+    expect(await ui.find({ key: 'subagent-4' })).toBeDefined()
+    await ui.unmount()
+  })
+
   test(`${surface}: subagent rows use confirmed tokens, prioritize running work, and expand without saving preferences`, async ($, on) => {
     const fixture = setup(on, { ...initial, activity: {
       owner: 'ui-test', hidden: false,

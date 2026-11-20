@@ -24,10 +24,13 @@ export async function resetActivity($: EngineInterface, owner: string): Promise<
   } catch { /* Optional display state. */ }
 }
 
-async function change($: EngineInterface, owner: string, apply: (state: ActivityState) => ActivityState): Promise<void> {
+async function change($: EngineInterface, owner: string, apply: (state: ActivityState) => ActivityState, claimOnStart = false): Promise<void> {
   try {
     if (await $.session.id() !== owner) return
-    await update($, activity, current => current.owner === owner ? apply(current) : current)
+    await update($, activity, current => {
+      if (current.owner === owner) return apply(current)
+      return claimOnStart ? apply(empty(owner)) : current
+    })
   } catch { /* Optional display state. */ }
 }
 
@@ -36,20 +39,15 @@ export async function toggleActivity($: EngineInterface, owner: string): Promise
 }
 
 export async function startMainActivity($: EngineInterface, owner: string, main: MainActivity, fresh: boolean): Promise<void> {
-  // A new chat starts with no claimed atom. Claim it only from a start, never
-  // from a late step result or completion callback.
-  try {
-    const current = await read($, activity)
-    if (current.owner !== owner) await resetActivity($, owner)
-  } catch { return }
-  await change($, owner, state => ({ ...state, main, subagents: fresh ? state.subagents.filter(row => row.running) : state.subagents }))
+  await change($, owner, state => ({ ...state, main, subagents: fresh ? state.subagents.filter(row => row.running) : state.subagents }), true)
 }
 
 export async function startAgentActivity($: EngineInterface, owner: string, row: SubagentActivity): Promise<void> {
-  try {
-    if ((await read($, activity)).owner !== owner) await resetActivity($, owner)
-  } catch { return }
-  await change($, owner, state => ({ ...state, subagents: [...state.subagents.filter(one => one.id !== row.id), row].slice(-MAX_ROWS) }))
+  await change($, owner, state => ({
+    ...state,
+    hidden: state.hidden && state.subagents.some(agent => agent.running),
+    subagents: [...state.subagents.filter(one => one.id !== row.id), row].slice(-MAX_ROWS),
+  }), true)
 }
 
 export async function updateMainActivity($: EngineInterface, owner: string, main: MainActivity): Promise<void> {
@@ -57,7 +55,18 @@ export async function updateMainActivity($: EngineInterface, owner: string, main
 }
 
 export async function updateAgentActivity($: EngineInterface, owner: string, id: string, apply: (row: SubagentActivity) => SubagentActivity): Promise<void> {
-  await change($, owner, state => ({ ...state, subagents: state.subagents.map(row => row.id === id ? apply(row) : row) }))
+  await change($, owner, state => {
+    const index = state.subagents.findIndex(row => row.id === id)
+    if (index < 0) return state
+    const before = state.subagents[index]!
+    const row = apply(before)
+    const subagents = state.subagents.slice()
+    subagents[index] = row
+    let hidden = state.hidden
+    if (row.failed && !before.failed) hidden = false
+    else if (before.running && !row.running && subagents.every(agent => !agent.running && !agent.failed)) hidden = true
+    return { ...state, subagents, hidden }
+  })
 }
 
 function validTokens(count: unknown): count is number {
