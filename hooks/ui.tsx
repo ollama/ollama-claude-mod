@@ -4,6 +4,7 @@ import { activityElements, displayName, setPulse, shownSubagents, tokenCount } f
 import { pickerMenu } from './menu'
 import type { Menu } from './menu'
 import { modelChoices, modelLabel } from './catalog'
+import { resolveNativeModel } from './models'
 
 export type UIState = ViewState & { activity?: ActivityState; isDark?: boolean; showResponseSpeed?: boolean }
 
@@ -33,7 +34,7 @@ function workerName(row: SubagentActivity): string {
   return row.running ? `${name ? name + ' · ' : ''}Starting…` : name || 'Subagent'
 }
 
-export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, state: UIState, actions: UIActions) {
+export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, state: UIState, actions: UIActions) {
   const els = $.ui.resolve(e)
   const { Box, Button, Input, Select, Text } = els
   const { preferences, showResponseSpeed = false } = state
@@ -63,7 +64,11 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
   // newly selected model (especially after switching back to Claude).
   const main = state.activity?.main?.target === target ? state.activity.main : undefined
   const isClaude = native || !!main?.model && /^(claude|opus|sonnet|haiku)/i.test(main.model)
-  const title = native ? (main?.model ? displayName(main.model) : 'Claude') : main?.model || target ? displayName(main?.model || target) : 'Choose model'
+  let modelId = main?.model || target
+  if (preferences.enabled && native && (!modelId || modelId === 'default')) {
+    modelId = await $.session.model().then(model => resolveNativeModel($, model)).catch(() => '')
+  }
+  const title = displayName(native && modelId === 'default' ? '' : modelId)
   const switchStatus = state.selection && (state.selection.status === 'pending' ? 'Switching…' : 'Switch failed')
   const summary = [preferences.enabled ? title : undefined, switchStatus].filter(Boolean).join(' · ')
   const notice = state.notice || (preferences.enabled || state.settingsOpen ? state.connectionIssue : undefined)
