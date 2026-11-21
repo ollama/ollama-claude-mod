@@ -5,12 +5,13 @@ import { pickerMenu } from './menu'
 import type { Menu } from './menu'
 import { modelChoices, modelLabel } from './catalog'
 
-export type UIState = ViewState & { activity?: ActivityState; isDark?: boolean }
+export type UIState = ViewState & { activity?: ActivityState; isDark?: boolean; showResponseSpeed?: boolean }
 
 export type UIActions = {
   setMode: (mode: Mode | 'never') => Promise<void>
   setModel: (model: string) => Promise<void>
   setEffort: (effort: Thinking | undefined) => Promise<void>
+  setShowResponseSpeed: (show: boolean) => Promise<void>
   toggleSettings: () => Promise<void>
   toggleSubagents: () => Promise<void>
   setOpenMenu: (open: OpenMenu) => Promise<void>
@@ -35,7 +36,7 @@ function workerName(row: SubagentActivity): string {
 export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, state: UIState, actions: UIActions) {
   const els = $.ui.resolve(e)
   const { Box, Button, Input, Select, Text } = els
-  const { preferences } = state
+  const { preferences, showResponseSpeed = false } = state
   const model = preferences[preferences.mode]
   const effort = preferences.mode === 'full' ? preferences.fullEffort : preferences.subagentEffort
   const models = state.settingsOpen ? modelChoices(state.models, model) : []
@@ -88,7 +89,7 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
         <Box flexDirection="row" alignItems="center" columnGap={1} flexGrow={1} flexShrink={1} minWidth={0}>
           <Text key="summary-status" weight="bold" color={isClaude ? 'claude' : undefined} wrap="truncate-end">{summary}</Text>
           {summaryEffort ? <Text key="summary-effort" dimColor wrap="truncate-end">{`· ${summaryEffort}`}</Text> : null}
-          {main?.tokensPerSecond !== undefined && Number.isFinite(main.tokensPerSecond)
+          {showResponseSpeed && main?.tokensPerSecond !== undefined && Number.isFinite(main.tokensPerSecond)
             ? <Text key="summary-speed" dimColor tabular wrap="truncate-end">{`· ${Math.round(main.tokensPerSecond * 10) / 10} tok/s`}</Text> : null}
         </Box>
         {!state.settingsOpen && rows.length > 0 ? <Button key="subagents-toggle" plain dimColor
@@ -126,6 +127,10 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
           {!openRow ? <Button key="advanced" plain dimColor label={`Advanced ${advanced ? '▾' : '▸'}`}
             onPress={() => actions.setOpenMenu(advanced ? null : { key: 'advanced' })} /> : null}
           {advanced ? <Box key="settings-details" flexDirection="column" rowGap={isTerminal ? 0 : 0.5}>
+            <Button key="show-response-speed" plain label={`Show response speed, ${showResponseSpeed ? 'checked' : 'unchecked'}`}
+              onPress={() => actions.setShowResponseSpeed(!showResponseSpeed)}>
+              {`${showResponseSpeed ? '☑' : '☐'} Show response speed (tok/s)`}
+            </Button>
             {model ? <Input key={`context-${state.endpoint}-${model}`} label="Context length" value={contextValue} submitLabel={isTerminal ? '' : 'Save'}
               onSubmit={value => value.trim() === contextValue ? undefined : actions.setContext(value)} /> : null}
             <Text key="ollama-usage" dimColor wrap="truncate-end">{usageLabel}</Text>

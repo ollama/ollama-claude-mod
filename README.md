@@ -35,6 +35,8 @@ New chats inherit your last saved setup. Selecting Never keeps both model choice
 
 Settings shows the model and its supported effort options. Open **Advanced** for context length, the Ollama address, and request usage. Select **Done** to return to the compact status and worker activity. The compact mode button stays available after the first message. Errors remain visible when settings are closed; a failed model switch includes **Retry**. Workers show **Starting…** until their first response confirms the model.
 
+To show tokens per second in the status bar, check **Show response speed** under **Settings → Advanced**. It starts off and applies across chats.
+
 ### Commands
 
 ```text
