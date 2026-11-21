@@ -15,16 +15,6 @@ Restart Claude Code or run the following in Claude Code after installation:
 
 `/restart plugins`
 
-### Moving from ollama-local
-
-For a user-scope install listed as `ollama@ollama-local`, close active Claude Code sessions and run these commands from a checkout of this version before following the install step above. The migration copies your saved chat preferences to `ollama@ollama`.
-
-```sh
-node scripts/migrate-settings.mjs && \
-  claude plugin uninstall ollama@ollama-local --scope user --keep-data && \
-  claude plugin marketplace remove ollama-local --scope user
-```
-
 ## Get started
 
 New installs start with **Subagents Only** enabled. Claude Code opens with your usual Claude model, and subagents use Ollama. The mod saves Kimi Pro (`kimi-k3.1-pro:cloud`) for the conversation and DeepSeek Flash (`deepseek-v4.1-flash:cloud`) for subagents.
