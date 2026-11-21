@@ -64,7 +64,8 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
   const main = state.activity?.main?.target === target ? state.activity.main : undefined
   const isClaude = native || !!main?.model && /^(claude|opus|sonnet|haiku)/i.test(main.model)
   const title = native ? (main?.model ? displayName(main.model) : 'Claude') : main?.model || target ? displayName(main?.model || target) : 'Choose model'
-  const summary = `${title}${state.selection ? state.selection.status === 'pending' ? ' · Switching…' : ' · Switch failed' : ''}`
+  const switchStatus = state.selection && (state.selection.status === 'pending' ? 'Switching…' : 'Switch failed')
+  const summary = [preferences.enabled ? title : undefined, switchStatus].filter(Boolean).join(' · ')
   const notice = state.notice || (preferences.enabled || state.settingsOpen ? state.connectionIssue : undefined)
   const rows = preferences.enabled ? state.activity?.subagents ?? [] : []
   const hidden = state.activity?.hidden ?? false
@@ -87,10 +88,10 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
     <Box key="ollama-bar" flexDirection="column" paddingX={1} rowGap={isTerminal ? 0 : 0.5}>
       <Box key="summary" flexDirection="row" alignItems="center" flexWrap="wrap" columnGap={1}>
         <Box flexDirection="row" alignItems="center" columnGap={1} flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text key="summary-status" weight="bold" color={isClaude ? 'claude' : undefined} wrap="truncate-end">{summary}</Text>
-          {summaryEffort ? <Text key="summary-effort" dimColor wrap="truncate-end">{`· ${summaryEffort}`}</Text> : null}
+          {summary ? <Text key="summary-status" weight="bold" color={isClaude ? 'claude' : undefined} wrap="truncate-end">{summary}</Text> : null}
+          {preferences.enabled && summaryEffort ? <Text key="summary-effort" dimColor wrap="truncate-end">{`· ${summaryEffort}`}</Text> : null}
           {showResponseSpeed && main?.tokensPerSecond !== undefined && Number.isFinite(main.tokensPerSecond)
-            ? <Text key="summary-speed" dimColor tabular wrap="truncate-end">{`· ${Math.round(main.tokensPerSecond * 10) / 10} tok/s`}</Text> : null}
+            ? <Text key="summary-speed" dimColor tabular wrap="truncate-end">{`${summary ? '· ' : ''}${Math.round(main.tokensPerSecond * 10) / 10} tok/s`}</Text> : null}
         </Box>
         {!state.settingsOpen && rows.length > 0 ? <Button key="subagents-toggle" plain dimColor
           label={`${rows.length} ${rows.length === 1 ? 'subagent' : 'subagents'}${succeeded ? ' ✓' : ''} ${hidden ? '▸' : '▾'}`} onPress={actions.toggleSubagents} /> : null}
