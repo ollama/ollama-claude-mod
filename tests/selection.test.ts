@@ -59,11 +59,14 @@ function fixture(current = FULL, preferences = defaults, throughCommandHook = fa
       get: async () => ({ value: state, version: 0 }),
       set: async (_ref: unknown, value: typeof state) => { state = value; return { isSet: true, version: 1 } },
     },
-    clock: { after: (_ms: number, callback: () => void) => {
-      const timer = { callback, cancelled: false }
-      timers.push(timer)
-      return { cancel: () => { timer.cancelled = true } }
-    } },
+    clock: {
+      sleep: async () => undefined,
+      after: (_ms: number, callback: () => void) => {
+        const timer = { callback, cancelled: false }
+        timers.push(timer)
+        return { cancel: () => { timer.cancelled = true } }
+      },
+    },
     command: { run: async ({ args }: { command: string; args: string }) => {
       calls.push(args)
       const event = { command: 'model', args, origin: { kind: 'plugin', name: 'ollama' } } as Command
@@ -279,6 +282,23 @@ test('failure keeps the requested settings and exposes the actual host until ret
   scheduleSelection(f.engine, 'selection-chat')
   await f.fire()
   expect(f.model()).toBe(FULL)
+  expect(f.state().selection).toBeUndefined()
+  expect(f.notice()).toBe('')
+  cancelSelection()
+})
+
+test('a successful switch waits for Desktop to publish the session model', async () => {
+  const f = fixture(NATIVE, { ...defaults, enabled: true })
+  let visibleModel = NATIVE
+  f.engine.session.model = async () => visibleModel
+  f.engine.clock.sleep = async () => {
+    expect(f.state().selection?.status).toBe('pending')
+    visibleModel = f.model()
+  }
+  scheduleSelection(f.engine, 'selection-chat')
+  await f.fire()
+  expect(f.selected).toEqual([FULL])
+  expect(f.calls).toEqual([FULL])
   expect(f.state().selection).toBeUndefined()
   expect(f.notice()).toBe('')
   cancelSelection()
