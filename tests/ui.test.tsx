@@ -606,6 +606,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
       owner: 'ui-test', hidden: false, subagents: [],
       main: { target: 'first', model: 'deepseek-v4.1-flash:1017-cloud', tokens: 800, tokensPerSecond: 43.267, running: false },
     } })
+    fixture.values.set('show-response-speed', true)
     const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: 'compact-identity', props })
     expect(await ui.find({ type: 'Text', text: 'DeepSeek v4.1 Flash (1017)' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '· 43.3 tok/s' })).toBeDefined()
@@ -624,25 +625,50 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(fixture.state().preferences.enabled).toBe(true)
     expect(fixture.state().preferences.full).toBe('first')
     expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeDefined()
-    expect(await ui.find({ key: 'summary-speed' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'tok/s' })).toBeUndefined()
     await ui.press({ key: 'settings' })
     expect((await ui.find({ key: 'mode' }))?.props.label).toBe(surface === 'desktop' ? 'When to use Ollama' : 'When to use Ollama: Subagents Only ▾')
     if (surface === 'desktop') await ui.select({ key: 'mode', value: 'never' })
     else { await ui.press({ key: 'mode' }); await ui.press({ key: 'mode-option-never' }) }
     expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeDefined()
-    expect(await ui.find({ key: 'summary-speed' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'tok/s' })).toBeUndefined()
     await ui.unmount()
   })
 
-  test(`${surface}: native Opus version and real speed appear while Ollama is off`, async ($, on) => {
-    setup(on, { ...initial, preferences: { ...initial.preferences, enabled: false }, activity: {
+  test(`${surface}: response speed is opt-in and the setting persists across chats`, async ($, on) => {
+    const fixture = setup(on, { ...initial, preferences: { ...initial.preferences, enabled: false }, activity: {
       owner: 'ui-test', hidden: false, subagents: [],
       main: { target: '', model: 'claude-opus-5-5', tokens: 1200, tokensPerSecond: 32, running: false },
     } })
-    const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: 'native-identity', props })
+    const site = { plugin: 'ollama', surface, component: 'AbovePrompt', requestId: 'native-identity', props } as const
+    const ui = await $.ui.mount(site)
     expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'tok/s' })).toBeUndefined()
+    await ui.press({ key: 'settings' })
+    await ui.press({ key: 'advanced' })
+    expect(await ui.find({ key: 'show-response-speed' })).toMatchObject({
+      text: '☐ Show response speed (tok/s)', props: { label: 'Show response speed, unchecked' },
+    })
+    await ui.press({ key: 'show-response-speed' })
     expect(await ui.find({ type: 'Text', text: '· 32 tok/s' })).toBeDefined()
+    expect(fixture.writes).toEqual(['show-response-speed'])
+    await ui.press({ key: 'settings' })
     await ui.unmount()
+
+    fixture.session('another-chat')
+    const next = await $.ui.mount({ ...site, requestId: 'another-chat' })
+    await next.press({ key: 'settings' })
+    await next.press({ key: 'advanced' })
+    expect(await next.find({ key: 'show-response-speed' })).toMatchObject({
+      text: '☑ Show response speed (tok/s)', props: { label: 'Show response speed, checked' },
+    })
+    const writesBeforeToggle = fixture.writes.length
+    await next.press({ key: 'show-response-speed' })
+    expect((await next.find({ key: 'show-response-speed' }))?.props.label).toBe('Show response speed, unchecked')
+    expect(await next.find({ type: 'Text', text: '· 32 tok/s' })).toBeUndefined()
+    expect(fixture.values.get('show-response-speed')).toBe(false)
+    expect(fixture.writes.slice(writesBeforeToggle)).toEqual(['show-response-speed'])
+    await next.unmount()
   })
 
   test(`${surface}: five completed agents share a single disclosure and can be inspected`, async ($, on) => {
@@ -731,7 +757,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
       props: { ...props, maxRows: 10, bodyColumns: 60 } })
     expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
     expect((await ui.find({ type: 'Text', text: '· Extra' }))?.text).toBe('· Extra')
-    expect(await ui.find({ type: 'Text', text: '· 32 tok/s' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'tok/s' })).toBeUndefined()
     await ui.press({ key: 'settings' })
     expect((await ui.find({ key: 'settings' }))?.props.label).toBe('Done')
     expect(await ui.find({ key: 'mode' })).toBeDefined()

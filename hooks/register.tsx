@@ -15,6 +15,8 @@ import { readAppearance, refreshAppearance } from './appearance'
 import { stopPulse } from './activity-view'
 import { dismissSummary, readSummary } from './summary'
 
+const SHOW_RESPONSE_SPEED = 'show-response-speed'
+
 function message(error: unknown): string {
   return error instanceof Error ? error.message : 'Could not save this change. Try again.'
 }
@@ -253,7 +255,8 @@ export const register: Register = on => {
     const current = await readView($)
     const activity = await readActivity($).catch(() => undefined)
     const appearance = await readAppearance($).catch(() => ({ isDark: true }))
-    const state = { ...current, ...(preferences ? { preferences } : {}), activity, ...appearance }
+    const showResponseSpeed = (await $.store.get(SHOW_RESPONSE_SPEED).catch(() => false)) === true
+    const state = { ...current, ...(preferences ? { preferences } : {}), activity, ...appearance, showResponseSpeed }
     return renderUI($, e, state, {
       setMode: async value => {
         try { await persist($, value === 'never' ? { enabled: false } : { enabled: true, mode: value }, owner) }
@@ -261,6 +264,12 @@ export const register: Register = on => {
       },
       setModel: value => change($, state.preferences.mode, value, owner),
       setEffort: value => change($, state.preferences.mode === 'full' ? 'fullEffort' : 'subagentEffort', value, owner),
+      setShowResponseSpeed: async show => {
+        try {
+          await $.store.set(SHOW_RESPONSE_SPEED, show)
+          $.ui.invalidate('ui.render')
+        } catch (error) { if (await $.session.id() === owner) await notice($, message(error)) }
+      },
       toggleSettings: async () => {
         if (await $.session.id() === owner) await updateView($, current => ({ ...current, settingsOpen: !current.settingsOpen, openMenu: null }))
       },
