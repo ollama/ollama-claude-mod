@@ -372,7 +372,7 @@ test('worker, automatic, resume and stale main events do not cancel a queued exp
   }
 })
 
-test('native model to Ollama then Subagents Only restores native while retaining worker settings', async () => {
+test('selecting Subagents after Ollama restores the native model and retains worker settings', async () => {
   const f = fixture(NATIVE)
   await f.manual(FULL)
   await modelSwitched(f.engine, { session_id: 'selection-chat', from_model: NATIVE, to_model: FULL, requested_model: FULL, source: 'command' } as ClassicHookInputs['PostModelSwitch'])
