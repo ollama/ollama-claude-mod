@@ -13,7 +13,7 @@ const initial: UIState = {
   connected: true, endpoint: 'http://localhost:11434', settingsOpen: false, notice: '',
 }
 const props = { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} }
-const expectedModes = [{ value: 'full', label: 'Always' }, { value: 'subagent', label: 'Subagents' }, { value: 'never', label: 'Off' }]
+const expectedModes = [{ value: 'full', label: 'Full' }, { value: 'subagent', label: 'Subagents' }, { value: 'never', label: 'Off' }]
 
 function setup(on: On, initialState = initial) {
   cancelSelection()
@@ -615,10 +615,10 @@ for (const surface of ['desktop', 'terminal'] as const) {
       await ui.select({ key: 'compact-mode', value: 'subagent' })
     }
     else {
-      expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe('Always ▾')
+      expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe('Full ▾')
       await ui.press({ key: 'compact-mode' })
       const choices = (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('compact-mode-option-'))
-      expect(choices.map(button => button.text.trim())).toEqual(['✓ Always', 'Subagents', 'Off'])
+      expect(choices.map(button => button.text.trim())).toEqual(['✓ Full', 'Subagents', 'Off'])
       await ui.press({ key: 'compact-mode-option-subagent' })
     }
     expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe(surface === 'desktop' ? '' : 'Subagents ▾')
@@ -819,7 +819,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
       expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe('')
       await ui.select({ key: 'compact-mode', value: 'never' })
     } else {
-      expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe('Always ▾')
+      expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe('Full ▾')
       await ui.press({ key: 'compact-mode' })
       await ui.press({ key: 'compact-mode-option-never' })
     }
