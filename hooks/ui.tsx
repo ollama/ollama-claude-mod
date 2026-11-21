@@ -96,7 +96,10 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
           label={`${rows.length} ${rows.length === 1 ? 'subagent' : 'subagents'}${succeeded ? ' ✓' : ''} ${hidden ? '▸' : '▾'}`} onPress={actions.toggleSubagents} /> : null}
         {!state.settingsOpen ? usagePicker('compact-mode') : null}
         {state.selection?.status === 'failed' ? <Button key="retry-switch" plain label="Retry" onPress={() => actions.setMode(preferences.enabled ? preferences.mode : 'never')} /> : null}
-        <Button key="settings" plain dimColor label={state.settingsOpen ? 'Done' : 'Settings'} onPress={actions.toggleSettings} />
+        <Button key="settings" plain dimColor label={state.settingsOpen ? 'Close Ollama settings' : 'Open Ollama settings'}
+          role={state.settingsOpen ? 'dismiss' : undefined} onPress={actions.toggleSettings}>
+          {state.settingsOpen ? '×' : '⚙'}
+        </Button>
       </Box>
       {notice ? <Text key="notice">{notice}</Text> : null}
       {shown.map(row => <Box key={`subagent-${row.id}`} flexDirection="row" alignItems="center" columnGap={2} paddingLeft={1}>

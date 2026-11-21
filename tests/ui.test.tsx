@@ -745,7 +745,7 @@ for (const status of ['pending', 'failed'] as const) {
 }
 
 for (const surface of ['desktop', 'terminal'] as const) {
-  test(`${surface}: narrow settings keep primary controls and Done visible while advanced details stay optional`, async ($, on) => {
+  test(`${surface}: narrow settings keep the close button and primary controls visible`, async ($, on) => {
     const failure = 'Ollama request failed. Choose another model and try again.'
     const f = setup(on, { ...initial, notice: failure, preferences: { ...initial.preferences, enabled: false }, activity: {
       owner: 'ui-test', hidden: false, subagents: [],
@@ -758,14 +758,16 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
     expect((await ui.find({ type: 'Text', text: '· Extra' }))?.text).toBe('· Extra')
     expect(await ui.find({ type: 'Text', text: 'tok/s' })).toBeUndefined()
+    const openButton = { text: '⚙', props: { label: 'Open Ollama settings' } }
+    expect(await ui.find({ key: 'settings' })).toMatchObject(openButton)
     await ui.press({ key: 'settings' })
-    expect((await ui.find({ key: 'settings' }))?.props.label).toBe('Done')
+    expect(await ui.find({ key: 'settings' })).toMatchObject({ text: '×', props: { label: 'Close Ollama settings', role: 'dismiss' } })
     expect(await ui.find({ key: 'mode' })).toBeDefined()
     expect(await ui.find({ key: 'endpoint' })).toBeUndefined()
     expect(await ui.find({ key: 'ollama-usage' })).toBeUndefined()
     await ui.press({ key: 'model' })
     expect(await ui.find({ key: 'mode' })).toBeDefined()
-    expect((await ui.find({ key: 'settings' }))?.props.label).toBe('Done')
+    expect((await ui.find({ key: 'settings' }))?.text).toBe('×')
     expect(f.state().notice).toBe(failure)
     expect(await ui.find({ type: 'Text', text: failure })).toBeDefined()
     await ui.press({ key: 'model' })
@@ -774,6 +776,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await ui.find({ type: 'Text', text: 'Ollama · 0 requests · 0 input tokens · 0 output tokens' })).toBeDefined()
     await ui.press({ key: 'settings' })
     expect(await ui.find({ key: 'settings-panel' })).toBeUndefined()
+    expect(await ui.find({ key: 'settings' })).toMatchObject(openButton)
     expect(f.state().notice).toBe(failure)
     expect(await ui.find({ type: 'Text', text: failure })).toBeDefined()
     expect(f.writes.filter(key => key.startsWith('preferences:') || key === 'preference-defaults-v1')).toEqual([])
