@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { configure } from './model-picker.mjs'
 
 async function fixture(t, settings) {
@@ -84,8 +85,9 @@ test('partial refresh adds new rows without deleting previously discovered model
 test('the packaged stdin entrypoint uses the shared catalog and returns a retryable lock status', async t => {
   const f = await fixture(t, { model: 'opus' })
   const catalog = JSON.stringify({ models: [{ name: 'shared', isCloud: false, isDecision: false }], complete: true })
+  const script = fileURLToPath(new URL('./model-picker.mjs', import.meta.url))
   const run = () => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [new URL('./model-picker.mjs', import.meta.url).pathname, 'install', '--catalog-stdin'], {
+    const child = spawn(process.execPath, [script, 'install', '--catalog-stdin'], {
       env: { ...process.env, CLAUDE_CONFIG_DIR: f.directory, OLLAMA_HOST: 'http://unreachable.invalid' }, stdio: ['pipe', 'pipe', 'pipe'],
     })
     let stderr = ''
