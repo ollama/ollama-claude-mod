@@ -606,6 +606,8 @@ for (const surface of ['desktop', 'terminal'] as const) {
       main: { target: 'first', model: 'deepseek-v4.1-flash:1017-cloud', tokens: 800, tokensPerSecond: 43.267, running: false },
     } })
     fixture.values.set('show-response-speed', true)
+    on('session.model', () => ({ value: 'claude-opus-5-5' }))
+    on('settings.read', () => ({ value: {} }))
     const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: 'compact-identity', props })
     expect(await ui.find({ type: 'Text', text: 'DeepSeek v4.1 Flash (1017)' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '· 43.3 tok/s' })).toBeDefined()
@@ -624,13 +626,13 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe(surface === 'desktop' ? '' : 'Subagents ▾')
     expect(fixture.state().preferences.enabled).toBe(true)
     expect(fixture.state().preferences.full).toBe('first')
-    expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: 'Opus 5.5' }))?.text).toBe('Opus 5.5')
     expect(await ui.find({ type: 'Text', text: 'tok/s' })).toBeUndefined()
     await ui.press({ key: 'settings' })
     expect((await ui.find({ key: 'mode' }))?.props.label).toBe(surface === 'desktop' ? 'Mode' : 'Mode: Subagents ▾')
     if (surface === 'desktop') await ui.select({ key: 'mode', value: 'never' })
     else { await ui.press({ key: 'mode' }); await ui.press({ key: 'mode-option-never' }) }
-    expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: 'tok/s' })).toBeUndefined()
     await ui.unmount()
   })
@@ -740,6 +742,22 @@ test('Off keeps a failed switch visible without repeating the previous model', a
   const ui = await $.ui.mount({ plugin: 'ollama', surface: 'terminal', component: 'AbovePrompt', requestId: 'off-switch-failed', props })
   expect((await ui.find({ type: 'Text', text: 'Switch failed' }))?.text).toBe('Switch failed')
   expect(await ui.find({ key: 'retry-switch' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('Subagents shows the native model behind a saved Ollama picker selection before a turn', async ($, on) => {
+  const f = setup(on, { ...initial, preferences: { ...initial.preferences, mode: 'subagent' } })
+  f.values.set('native-model-v1:ui-test', 'claude-sonnet-4-6')
+  let selectedModel = initial.preferences.full
+  on('session.model', () => ({ value: selectedModel }))
+  on('settings.read', () => ({ value: {} }))
+  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'native-model-label', props })
+  expect((await ui.find({ type: 'Text', text: 'Sonnet 4.6' }))?.text).toBe('Sonnet 4.6')
+
+  selectedModel = 'default'
+  await ui.redraw(props)
+  expect((await ui.find({ type: 'Text', text: 'Claude' }))?.text).toBe('Claude')
+  expect(f.writes).toEqual([])
   await ui.unmount()
 })
 
