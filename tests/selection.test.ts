@@ -287,7 +287,37 @@ test('failure keeps the requested settings and exposes the actual host until ret
   cancelSelection()
 })
 
-test('a successful switch waits for Desktop to publish the session model', async () => {
+test('Desktop keeps the native picker independent of the Ollama mode', async () => {
+  for (const [current, preferences] of [
+    [NATIVE, { ...defaults, enabled: true }],
+    [FULL, { ...defaults, enabled: true, mode: 'subagent' }],
+    [FULL, defaults],
+  ] as const) {
+    const f = fixture(current, preferences)
+    f.engine.env.get = async name => name === 'CLAUDE_CODE_ENTRYPOINT' ? 'claude-desktop' : undefined
+    scheduleSelection(f.engine, 'selection-chat')
+    await f.fire()
+    expect(f.calls).toEqual([])
+    expect(f.model()).toBe(current)
+    expect(f.state().selection).toBeUndefined()
+  }
+})
+
+test('Desktop clears a previous picker failure while preserving unrelated notices', async () => {
+  const f = fixture(NATIVE, { ...defaults, enabled: true })
+  f.engine.env.get = async name => name === 'CLAUDE_CODE_ENTRYPOINT' ? 'claude-desktop' : undefined
+  const oldSwitchNotice = 'The model switch did not finish. Choose a model with /model or select the use setting again to retry.'
+  const unrelatedNotice = 'Could not save connection settings.'
+  for (const [notice, expected] of [[oldSwitchNotice, ''], [unrelatedNotice, unrelatedNotice]]) {
+    Object.assign(f.state(), { selection: { target: FULL, current: '', status: 'failed' }, notice })
+    scheduleSelection(f.engine, 'selection-chat')
+    await f.fire()
+    expect(f.state().selection).toBeUndefined()
+    expect(f.notice()).toBe(expected)
+  }
+})
+
+test('a successful native switch waits for the host to publish the session model', async () => {
   const f = fixture(NATIVE, { ...defaults, enabled: true })
   let visibleModel = NATIVE
   f.engine.session.model = async () => visibleModel

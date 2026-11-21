@@ -6,6 +6,7 @@ import { refreshConfiguredWindow } from './window'
 
 type Selection = { owner: string; revision: number; target: string; accepted: boolean }
 type Request = { owner: string; revision: number }
+const SWITCH_FAILED_NOTICE = 'The model switch did not finish. Choose a model with /model or select the use setting again to retry.'
 let revision = 0
 let timer: Timer | undefined
 let active: Selection | undefined
@@ -43,7 +44,16 @@ async function reconcile($: EngineInterface, request: Request): Promise<void> {
   const { owner, revision: version } = request
   running = true
   try {
+    const desktop = await $.env.get('CLAUDE_CODE_ENTRYPOINT') === 'claude-desktop'
     if (owner !== await $.session.id() || version !== revision) return
+    if (desktop) {
+      // Desktop routes each turn from preferences. Discard picker state left by an older version.
+      await updateView($, state => {
+        const notice = state.notice === SWITCH_FAILED_NOTICE ? '' : state.notice
+        return state.selection || notice !== state.notice ? { ...state, selection: undefined, notice } : state
+      }).catch(() => undefined)
+      return
+    }
     const preferences = await getPreferences($)
     const current = await $.session.model()
     const target = preferences.enabled && preferences.mode === 'full'
@@ -70,8 +80,7 @@ async function reconcile($: EngineInterface, request: Request): Promise<void> {
     active = { owner, revision: version, target, accepted: false }
     const result = await $.command.run({ command: 'model', args: target })
     if (result.exitCode) throw new Error('The model command failed.')
-    // Desktop can publish the new session model after /model returns. Give
-    // it up to a second to settle without issuing the command again.
+    // The host can publish the new session model after /model returns.
     for (const delay of [0, 100, 300, 600]) {
       if (delay) await $.clock.sleep(delay)
       const selected = await $.session.model()
@@ -94,7 +103,7 @@ async function reconcile($: EngineInterface, request: Request): Promise<void> {
           if (state.endpoint && state.endpoint !== error.endpoint) return { ...state, selection }
           return { ...state, selection, connected: false, connectionIssue: error.message, notice: '' }
         }
-        return { ...state, selection, notice: 'The model switch did not finish. Choose a model with /model or select the use setting again to retry.' }
+        return { ...state, selection, notice: SWITCH_FAILED_NOTICE }
       }).catch(() => undefined)
     }
   } finally {
