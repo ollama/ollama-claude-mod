@@ -24,8 +24,8 @@ const effortLabels: Record<Thinking, string> = {
   off: 'Off', on: 'On', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max',
 }
 
-export const modeLabels: Record<Mode, string> = { full: 'Always', subagent: 'Subagents Only' }
-const modeOptions = Object.entries({ never: 'Never', subagent: modeLabels.subagent, full: modeLabels.full }).map(([value, label]) => ({ value, label }))
+export const modeLabels: Record<Mode | 'never', string> = { full: 'Always', subagent: 'Subagents', never: 'Off' }
+const modeOptions = Object.entries(modeLabels).map(([value, label]) => ({ value, label }))
 
 function workerName(row: SubagentActivity): string {
   const name = row.model ? displayName(row.model) : ''
@@ -55,7 +55,7 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
     : <Select key={menu.key} label={menu.label} value={menu.value} options={menu.options} onSelect={menu.onSelect} />
   const window = state.modelWindow?.model === model && state.modelWindow.endpoint === state.endpoint ? state.modelWindow : undefined
   const contextValue = window?.effective ? String(window.effective) : ''
-  const usagePicker = (key: string, label = 'When to use Ollama') => picker({ key, label, value: preferences.enabled ? preferences.mode : 'never',
+  const usagePicker = (key: string, label = '') => picker({ key, label, value: preferences.enabled ? preferences.mode : 'never',
     options: modeOptions, onSelect: value => actions.setMode(value as Mode | 'never') })
   const target = state.selection?.current ?? (preferences.enabled && preferences.mode === 'full' ? preferences.full : '')
   const native = !target
@@ -94,7 +94,7 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
         </Box>
         {!state.settingsOpen && rows.length > 0 ? <Button key="subagents-toggle" plain dimColor
           label={`${rows.length} ${rows.length === 1 ? 'subagent' : 'subagents'}${succeeded ? ' ✓' : ''} ${hidden ? '▸' : '▾'}`} onPress={actions.toggleSubagents} /> : null}
-        {!state.settingsOpen ? usagePicker('compact-mode', preferences.enabled ? '' : undefined) : null}
+        {!state.settingsOpen ? usagePicker('compact-mode') : null}
         {state.selection?.status === 'failed' ? <Button key="retry-switch" plain label="Retry" onPress={() => actions.setMode(preferences.enabled ? preferences.mode : 'never')} /> : null}
         <Button key="settings" plain dimColor label={state.settingsOpen ? 'Done' : 'Settings'} onPress={actions.toggleSettings} />
       </Box>
@@ -118,7 +118,7 @@ export function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>, stat
       {state.settingsOpen ? (
         <Box key="settings-panel" flexDirection="column" rowGap={isTerminal ? 0 : 0.5}>
           <Box key="controls" flexDirection="row" flexWrap="wrap" alignItems="flex-start" columnGap={2} rowGap={1}>
-            {usagePicker('mode')}
+            {usagePicker('mode', 'Mode')}
           </Box>
           {!openRow || openRow === 'model' ? picker({ key: 'model', label: 'Model', value: model, options, searchable: true, onSelect: actions.setModel }) : null}
           {efforts.length > 0 && (!openRow || openRow === 'effort') ? picker({ key: 'effort', label: 'Effort', value: currentEffort ?? '',

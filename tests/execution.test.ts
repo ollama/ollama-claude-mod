@@ -236,7 +236,7 @@ test('resuming an active worker retains its captured settings until completion',
   await f.step(`${f.id}-next-turn`, 'claude-native', async model => { expect(model).toBe('claude-native') }, agentId)
 })
 
-test('Off and Subagents Only preserve native model changes within the main turn', async () => {
+test('Off and Subagents preserve native model changes within the main turn', async () => {
   for (const enabled of [false, true]) {
     const f = fixture('subagent')
     f.preferences.enabled = enabled
