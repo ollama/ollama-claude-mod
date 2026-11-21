@@ -310,7 +310,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(fixture.state().preferences).toMatchObject({ enabled: true, mode: 'full' })
     await select('never')
     expect(fixture.state().preferences).toEqual({ ...initial.preferences, enabled: false })
-    expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeUndefined()
     expect(fixture.values.has('preferences:ui-test:full')).toBe(false)
     expect(fixture.values.has('preferences:ui-test:subagent')).toBe(false)
     await select('full')
@@ -630,7 +630,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect((await ui.find({ key: 'mode' }))?.props.label).toBe(surface === 'desktop' ? 'Mode' : 'Mode: Subagents ▾')
     if (surface === 'desktop') await ui.select({ key: 'mode', value: 'never' })
     else { await ui.press({ key: 'mode' }); await ui.press({ key: 'mode-option-never' }) }
-    expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Claude' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: 'tok/s' })).toBeUndefined()
     await ui.unmount()
   })
@@ -638,11 +638,12 @@ for (const surface of ['desktop', 'terminal'] as const) {
   test(`${surface}: response speed is opt-in and the setting persists across chats`, async ($, on) => {
     const fixture = setup(on, { ...initial, preferences: { ...initial.preferences, enabled: false }, activity: {
       owner: 'ui-test', hidden: false, subagents: [],
-      main: { target: '', model: 'claude-opus-5-5', tokens: 1200, tokensPerSecond: 32, running: false },
+      main: { target: '', model: 'claude-opus-5-5', effort: 'xhigh', tokens: 1200, tokensPerSecond: 32, running: false },
     } })
     const site = { plugin: 'ollama', surface, component: 'AbovePrompt', requestId: 'native-identity', props } as const
     const ui = await $.ui.mount(site)
-    expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'Extra' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: 'tok/s' })).toBeUndefined()
     await ui.press({ key: 'settings' })
     await ui.press({ key: 'advanced' })
@@ -650,7 +651,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
       text: '☐ Show response speed (tok/s)', props: { label: 'Show response speed, unchecked' },
     })
     await ui.press({ key: 'show-response-speed' })
-    expect(await ui.find({ type: 'Text', text: '· 32 tok/s' })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: '32 tok/s' }))?.text).toBe('32 tok/s')
     expect(fixture.writes).toEqual(['show-response-speed'])
     await ui.press({ key: 'settings' })
     await ui.unmount()
@@ -665,7 +666,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     const writesBeforeToggle = fixture.writes.length
     await next.press({ key: 'show-response-speed' })
     expect((await next.find({ key: 'show-response-speed' }))?.props.label).toBe('Show response speed, unchecked')
-    expect(await next.find({ type: 'Text', text: '· 32 tok/s' })).toBeUndefined()
+    expect(await next.find({ type: 'Text', text: '32 tok/s' })).toBeUndefined()
     expect(fixture.values.get('show-response-speed')).toBe(false)
     expect(fixture.writes.slice(writesBeforeToggle)).toEqual(['show-response-speed'])
     await next.unmount()
@@ -733,6 +734,15 @@ test('/ollama off preserves explicit model choices and selecting a mode enables 
   expect(fixture.state().preferences).toEqual({ ...initial.preferences, mode: 'subagent' })
 })
 
+test('Off keeps a failed switch visible without repeating the previous model', async ($, on) => {
+  setup(on, { ...initial, preferences: { ...initial.preferences, enabled: false },
+    selection: { target: '', current: 'first', status: 'failed' } })
+  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'terminal', component: 'AbovePrompt', requestId: 'off-switch-failed', props })
+  expect((await ui.find({ type: 'Text', text: 'Switch failed' }))?.text).toBe('Switch failed')
+  expect(await ui.find({ key: 'retry-switch' })).toBeDefined()
+  await ui.unmount()
+})
+
 for (const status of ['pending', 'failed'] as const) {
   test(`${status} main switches show the actual native model, not the requested Ollama model`, async ($, on) => {
     setup(on, { ...initial, selection: { target: 'first', current: '', status }, activity: {
@@ -747,7 +757,7 @@ for (const status of ['pending', 'failed'] as const) {
 for (const surface of ['desktop', 'terminal'] as const) {
   test(`${surface}: narrow settings keep the close button and primary controls visible`, async ($, on) => {
     const failure = 'Ollama request failed. Choose another model and try again.'
-    const f = setup(on, { ...initial, notice: failure, preferences: { ...initial.preferences, enabled: false }, activity: {
+    const f = setup(on, { ...initial, notice: failure, preferences: { ...initial.preferences, mode: 'subagent' }, activity: {
       owner: 'ui-test', hidden: false, subagents: [],
       main: { target: '', model: 'claude-opus-5-5', effort: 'xhigh', tokens: 1200, tokensPerSecond: 32, running: true },
     } })

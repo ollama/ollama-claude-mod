@@ -23,7 +23,7 @@ New installs start with **Subagents** enabled. Claude Code opens with your usual
 2. Set **Mode** to **Always** for Ollama in the conversation and subagents, or **Subagents** to keep Claude in the conversation.
 3. Choose the model for the selected mode. Select **Off** whenever you want Claude for both roles.
 
-In Claude Desktop, the Ollama controls choose the model for each turn independently of Claude's built-in model picker. The Ollama bar above the prompt shows the conversation model.
+In Claude Desktop, the Ollama controls choose the model for each turn independently of Claude's built-in model picker. The Ollama bar shows the conversation model when Ollama is enabled. With **Off** selected, Claude's own status line shows the model and effort.
 
 | Setting | Conversation | Subagents |
 |---|---|---|
