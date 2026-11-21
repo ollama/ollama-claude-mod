@@ -20,7 +20,7 @@ export type UIActions = {
 }
 
 const effortLabels: Record<Thinking, string> = {
-  off: 'Off', on: 'On', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max',
+  off: 'Off', on: 'On', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max',
 }
 
 export const modeLabels: Record<Mode, string> = { full: 'Always', subagent: 'Subagents Only' }

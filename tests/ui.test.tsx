@@ -6,7 +6,7 @@ import { cancelSelection } from '../hooks/selection'
 const initial: UIState = {
   preferences: { enabled: true, mode: 'full', full: 'first', subagent: 'second', fullEffort: 'high', subagentEffort: 'on' },
   models: [
-    { name: 'first', isCloud: false, isDecision: false, contextLength: 8192, efforts: ['low', 'high'], defaultEffort: 'low' },
+    { name: 'first', isCloud: false, isDecision: false, contextLength: 8192, efforts: ['low', 'high', 'xhigh'], defaultEffort: 'low' },
     { name: 'second', isCloud: false, isDecision: false, contextLength: 8192, efforts: ['off', 'on'], defaultEffort: 'off' },
     { name: 'decider', isCloud: false, isDecision: true, contextLength: 8192, efforts: [] },
   ],
@@ -105,7 +105,9 @@ test('desktop: selecting a mode uses its model and effort, and off restores Clau
   const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'bar', props })
   await ui.press({ key: 'settings' })
   expect((await ui.find({ key: 'model' }))?.props).toMatchObject({ label: 'Model: First ▾' })
-  expect((await ui.find({ key: 'effort' }))?.props).toMatchObject({ value: 'high', options: [{ value: 'low', label: 'Low' }, { value: 'high', label: 'High' }] })
+  expect((await ui.find({ key: 'effort' }))?.props).toMatchObject({ value: 'high', options: [
+    { value: 'low', label: 'Low' }, { value: 'high', label: 'High' }, { value: 'xhigh', label: 'Extra' },
+  ] })
   await ui.select({ key: 'mode', value: 'subagent' })
   expect(await ui.find({ type: 'Text', text: 'Claude runs this chat. Ollama runs eligible subagents.' })).toBeUndefined()
   expect(values.get('preferences:ui-test:mode')).toEqual({ version: 1, value: 'subagent' })
@@ -114,7 +116,8 @@ test('desktop: selecting a mode uses its model and effort, and off restores Clau
   await ui.press({ key: 'model' })
   await ui.press({ key: 'model-option-first' })
   expect((await ui.find({ key: 'effort' }))?.props.value).toBe('low')
-  await ui.select({ key: 'effort', value: 'high' })
+  await ui.select({ key: 'effort', value: 'xhigh' })
+  expect(values.get('preferences:ui-test:subagentEffort')).toEqual({ version: 1, value: 'xhigh' })
   await ui.select({ key: 'effort', value: 'low' })
   expect(values.get('preferences:ui-test:subagent')).toEqual({ version: 1, value: 'first' })
   expect(values.get('preferences:ui-test:subagentEffort')).toEqual({ version: 1, value: null })
@@ -720,14 +723,14 @@ for (const surface of ['desktop', 'terminal'] as const) {
     const failure = 'Ollama request failed. Choose another model and try again.'
     const f = setup(on, { ...initial, notice: failure, preferences: { ...initial.preferences, enabled: false }, activity: {
       owner: 'ui-test', hidden: false, subagents: [],
-      main: { target: '', model: 'claude-opus-5-5', effort: 'high', tokens: 1200, tokensPerSecond: 32, running: true },
+      main: { target: '', model: 'claude-opus-5-5', effort: 'xhigh', tokens: 1200, tokensPerSecond: 32, running: true },
     } })
     on('settings.read', () => ({ value: {} }))
     on('config.set', (_, e) => ({ value: e.value }))
     const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: `narrow-settings-${surface}`,
       props: { ...props, maxRows: 10, bodyColumns: 60 } })
     expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '· High' })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: '· Extra' }))?.text).toBe('· Extra')
     expect(await ui.find({ type: 'Text', text: '· 32 tok/s' })).toBeDefined()
     await ui.press({ key: 'settings' })
     expect((await ui.find({ key: 'settings' }))?.props.label).toBe('Done')
