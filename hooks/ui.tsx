@@ -75,7 +75,6 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
   const rows = preferences.enabled ? state.activity?.subagents ?? [] : []
   const hidden = state.activity?.hidden ?? false
   const showRows = !hidden && !state.settingsOpen
-  const succeeded = rows.length > 0 && rows.every(row => !row.running && !row.failed)
   const shown = showRows ? shownSubagents(rows, Math.max(1, Math.min(5, e.props.maxRows - 2))) : []
   const remaining = showRows && shown.length < rows.length ? rows.filter(row => !shown.includes(row)) : []
   const usage = state.activity?.ollama ?? { requests: 0, inputTokens: 0, outputTokens: 0 }
@@ -92,14 +91,14 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
   const bar = (
     <Box key="ollama-bar" flexDirection="column" paddingX={1} rowGap={isTerminal ? 0 : 0.5}>
       <Box key="summary" flexDirection="row" alignItems="center" flexWrap="wrap" columnGap={1}>
-        <Box flexDirection="row" alignItems="center" columnGap={1} flexGrow={1} flexShrink={1} minWidth={0}>
+        <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap={1} flexGrow={1} flexShrink={1} minWidth={0}>
           {summary ? <Text key="summary-status" weight="bold" color={isClaude ? 'claude' : undefined} wrap="truncate-end">{summary}</Text> : null}
+          {!state.settingsOpen && rows.length > 0 ? <Button key="subagents-toggle" plain dimColor
+            label={`${rows.length} ${rows.length === 1 ? 'subagent' : 'subagents'} ${hidden ? '▾' : '▴'}`} onPress={actions.toggleSubagents} /> : null}
           {preferences.enabled && summaryEffort ? <Text key="summary-effort" dimColor wrap="truncate-end">{`· ${summaryEffort}`}</Text> : null}
           {showResponseSpeed && main?.tokensPerSecond !== undefined && Number.isFinite(main.tokensPerSecond)
             ? <Text key="summary-speed" dimColor tabular wrap="truncate-end">{`${summary ? '· ' : ''}${Math.round(main.tokensPerSecond * 10) / 10} tok/s`}</Text> : null}
         </Box>
-        {!state.settingsOpen && rows.length > 0 ? <Button key="subagents-toggle" plain dimColor
-          label={`${rows.length} ${rows.length === 1 ? 'subagent' : 'subagents'}${succeeded ? ' ✓' : ''} ${hidden ? '▸' : '▾'}`} onPress={actions.toggleSubagents} /> : null}
         {!state.settingsOpen ? usagePicker('compact-mode') : null}
         {state.selection?.status === 'failed' ? <Button key="retry-switch" plain label="Retry" onPress={() => actions.setMode(preferences.enabled ? preferences.mode : 'never')} /> : null}
         <Button key="settings" plain dimColor label={state.settingsOpen ? 'Close Ollama settings' : 'Open Ollama settings'}

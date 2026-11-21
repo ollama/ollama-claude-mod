@@ -680,10 +680,16 @@ for (const surface of ['desktop', 'terminal'] as const) {
     } })
     on('prompt.submit', (_, e) => ({ text: e.text }))
     const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: 'finished-workers', props })
-    expect((await ui.find({ key: 'subagents-toggle' }))?.props.label).toBe('5 subagents ✓ ▸')
+    expect((await ui.find({ key: 'summary' }))?.children[0]).toMatchObject({
+      children: [
+        { type: 'Text', children: ['First'] },
+        { type: 'Button', props: { key: 'subagents-toggle', label: '5 subagents ▾' } },
+        { type: 'Text' },
+      ],
+    })
     expect(await ui.find({ key: 'subagent-0' })).toBeUndefined()
     await ui.press({ key: 'subagents-toggle' })
-    expect((await ui.find({ key: 'subagents-toggle' }))?.props.label).toBe('5 subagents ✓ ▾')
+    expect((await ui.find({ key: 'subagents-toggle' }))?.props.label).toBe('5 subagents ▴')
     expect(await ui.find({ key: 'subagent-0' })).toBeDefined()
     expect(await ui.find({ key: 'subagent-4' })).toBeDefined()
     await $.prompt.submit({ text: 'Next question', wait: false, origin: { kind: 'composer' } })
@@ -718,7 +724,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     await ui.press({ key: 'subagents-toggle' })
     expect(await ui.find({ key: 'subagent-running' })).toBeUndefined()
     expect(await ui.find({ key: 'subagents-left' })).toBeUndefined()
-    expect((await ui.find({ key: 'subagents-toggle' }))?.props).toMatchObject({ label: '6 subagents ▸' })
+    expect((await ui.find({ key: 'subagents-toggle' }))?.props.label).toBe('6 subagents ▾')
     await ui.press({ key: 'subagents-toggle' })
     expect(await ui.find({ key: 'subagent-running' })).toBeDefined()
     expect(fixture.writes).toEqual([])
