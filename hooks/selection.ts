@@ -69,11 +69,20 @@ async function reconcile($: EngineInterface, request: Request): Promise<void> {
     if (owner !== await $.session.id() || version !== revision) return
     active = { owner, revision: version, target, accepted: false }
     const result = await $.command.run({ command: 'model', args: target })
-    if (owner !== await $.session.id() || version !== revision) return
-    const selected = await $.session.model()
-    const matches = target === 'default' ? !await isOllamaModel($, selected) : selected === target
-    if (result.exitCode || !matches) throw new Error('The host did not select the requested model.')
-    await updateView($, state => ({ ...state, selection: undefined, notice: '' }))
+    if (result.exitCode) throw new Error('The model command failed.')
+    // Desktop can publish the new session model after /model returns. Give
+    // it up to a second to settle without issuing the command again.
+    for (const delay of [0, 100, 300, 600]) {
+      if (delay) await $.clock.sleep(delay)
+      const selected = await $.session.model()
+      const matches = target === 'default' ? !await isOllamaModel($, selected) : selected === target
+      if (owner !== await $.session.id() || version !== revision) return
+      if (matches) {
+        await updateView($, state => ({ ...state, selection: undefined, notice: '' }))
+        return
+      }
+    }
+    throw new Error('The host did not select the requested model.')
   } catch (error) {
     if (owner === await $.session.id() && version === revision) {
       const current = await $.session.model()
