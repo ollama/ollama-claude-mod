@@ -722,7 +722,7 @@ test('returning from Full to a native model keeps prior Ollama history safe for 
   expect(body.messages[1].content).toEqual([{ type: 'text', text: 'prior answer' }])
 })
 
-test('Always sends the main request to Kimi and parallel native Haiku agents to DeepSeek', async () => {
+test('Full sends the main request to Kimi and parallel native Haiku agents to DeepSeek', async () => {
   const f = fixture()
   const main = 'kimi-k3.1-pro:cloud'
   const worker = 'deepseek-v4.1-flash:cloud'

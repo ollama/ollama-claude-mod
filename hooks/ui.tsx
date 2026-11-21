@@ -24,7 +24,7 @@ const effortLabels: Record<Thinking, string> = {
   off: 'Off', on: 'On', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max',
 }
 
-export const modeLabels: Record<Mode | 'never', string> = { full: 'Always', subagent: 'Subagents', never: 'Off' }
+export const modeLabels: Record<Mode | 'never', string> = { full: 'Full', subagent: 'Subagents', never: 'Off' }
 const modeOptions = Object.entries(modeLabels).map(([value, label]) => ({ value, label }))
 
 function workerName(row: SubagentActivity): string {
