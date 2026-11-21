@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 
 // Claude compiles native TypeScript modules itself. Check the sources, then
 // package that same module tree so its capability scan can follow imports.
-const checked = spawnSync('node_modules/.bin/tsc', ['--noEmit'], { stdio: 'inherit' })
+const checked = spawnSync(process.execPath, ['node_modules/typescript/bin/tsc', '--noEmit'], { stdio: 'inherit' })
 if (checked.status !== 0) process.exit(checked.status ?? 1)
 const target = 'dist/ollama'
 await rm(target, { recursive: true, force: true })
