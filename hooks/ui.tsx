@@ -106,15 +106,17 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
     : <Select key={menu.key} label={menu.label} value={menu.value} options={menu.options} onSelect={menu.onSelect} />
   const disclosure = (key: string, label: string, subject: string, expanded: boolean, onPress: () => Promise<void>) => {
     if (!Svg) return <Button key={key} plain dimColor label={`${label} ${expanded ? '˄' : '˅'}`} onPress={onPress} />
-    // Desktop buttons accept text. Reserve space for the chevron and cover both with one press target.
-    const columns = label.length + 5
-    return <Box key={`${key}-control`} flexDirection="row" alignItems="center" columnGap={0} flexShrink={0}>
-      <Box width={columns} flexDirection="column" flexShrink={0} alignItems="flex-end"
-        justifyContent="center" paddingRight={1} paddingTop={0.25}>
-        <Svg source={chevronSvg(expanded ? 'up' : 'down')} alt={`${expanded ? 'Collapse' : 'Expand'} ${subject}`}
-          width={chevronSize} height={chevronSize} />
+    // Let the native button size both layers. The chevron sits in the space after
+    // the label, behind the button so the whole disclosure receives the click.
+    return <Box key={`${key}-control`} flexDirection="column" alignItems="stretch" flexShrink={0}>
+      <Box height={0} flexShrink={0} flexDirection="row" justifyContent="flex-end" alignItems="flex-start"
+        paddingRight={1} overflow="visible">
+        <Box paddingTop={1}>
+          <Svg source={chevronSvg(expanded ? 'up' : 'down')} alt={`${expanded ? 'Collapse' : 'Expand'} ${subject}`}
+            width={chevronSize} height={chevronSize} />
+        </Box>
       </Box>
-      <Box width={columns} marginLeft={-columns} flexDirection="column" alignItems="stretch" flexShrink={0} overflow="visible">
+      <Box position="relative" flexDirection="column" alignItems="stretch" overflow="visible">
         <Button key={key} plain dimColor label={`${label}\u2003`} onPress={onPress} />
       </Box>
     </Box>
