@@ -8,7 +8,7 @@ export const view = atom({ plugin: 'ollama', key: 'view' } as const, {
   owner: '',
   preferences: DEFAULT_PREFERENCES,
   models: [], connected: false, endpoint: '', settingsOpen: false, openMenu: null, notice: '',
-} as ViewState, { shape: 'view-v1' })
+} as ViewState, { shape: 'view-v2' })
 
 let clearedSession: string | undefined
 

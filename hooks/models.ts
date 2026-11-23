@@ -90,7 +90,7 @@ export async function isOllamaModel($: EngineInterface, candidate: string): Prom
   const tag = canonicalModel(candidate)
   const matches = (name: string) => canonicalModel(name) === tag
   const preferences = await getPreferences($)
-  if (matches(preferences.full) || matches(preferences.subagent)) return true
+  if (matches(preferences.model)) return true
   if (catalogRows(await $.store.get(CATALOG_STORE)).some(row => matches(row.model))) return true
   const state = await readView($)
   if (state.models.some(model => !model.isDecision && matches(model.name))) return true
@@ -155,7 +155,7 @@ export async function modelSwitched($: EngineInterface, e: ClassicHookInputs['Po
   if (ollama) {
     const name = await isOllamaModel($, selected) ? selected : e.to_model
     if (!await isCurrentMainSwitch($, e)) return undefined
-    return savePreferences($, owner, { full: name, mode: 'full', enabled: true })
+    return savePreferences($, owner, { model: name, mode: 'full', enabled: true })
   }
   const preferences = await getPreferences($)
   if (!await isCurrentMainSwitch($, e)) return undefined

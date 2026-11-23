@@ -20,10 +20,10 @@ async function routingNote($: EngineInterface): Promise<string> {
     const preferences = await getPreferences($)
     if (owner !== await $.session.id()) return `${PREFIX}Settings changed with the chat; the current target is not confirmed.`
     if (!preferences.enabled) return `${PREFIX}Off for new work; use native Claude Code models.`
-    const worker = JSON.stringify(preferences.subagent)
+    const model = JSON.stringify(preferences.model)
     const intent = preferences.mode === 'full'
-      ? `Full; configured targets ${JSON.stringify(preferences.full)} for this conversation and ${worker} for native subagents`
-      : `Subagents; this conversation stays native, configured target ${worker} for native subagents`
+      ? `Full; configured target ${model} for this conversation and native subagents`
+      : `Subagents; this conversation stays native, configured target ${model} for native subagents`
     return `${PREFIX}${intent}. Use the native Agent tool; its model aliases select the native startup model, and omitting model inherits routing.`
   } catch {
     return `${PREFIX}Current settings could not be read; do not assume an Ollama target or successful routing.`

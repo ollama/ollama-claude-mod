@@ -11,7 +11,7 @@ import type { Register } from 'claude-code'
 const NATIVE = 'claude-opus-5-5'
 const FULL = 'glm-5.3-flash:cloud'
 const WORKER = 'kimi-k3:cloud'
-const defaults: Preferences = { enabled: false, mode: 'full', full: FULL, subagent: WORKER }
+const defaults: Preferences = { enabled: false, mode: 'full', model: FULL }
 type Command = Parameters<Hook<'command.run'>>[1]
 type Next = Parameters<Hook<'command.run'>>[2]
 type ConfirmNext = Parameters<Hook<'classic.PreModelSwitch'>>[2]
@@ -32,7 +32,7 @@ function fixture(current = FULL, preferences = defaults, throughCommandHook = fa
   let metadataWait: Promise<void> | undefined
   let releaseMetadata: (() => void) | undefined
   let metadataStatus = 200
-  let state = { shape: 'view-v1', value: { preferences, models: [], notice: '' } }
+  let state = { shape: 'view-v2', value: { preferences, models: [], notice: '' } }
   const timers: { cancelled: boolean; callback: () => void }[] = []
   const queued: { event: Command; resolve: (value: CommandRunResult) => void }[] = []
   const calls: string[] = []
@@ -334,12 +334,12 @@ test('a successful native switch waits for the host to publish the session model
   cancelSelection()
 })
 
-test('editing the full model replaces a queued switch with the latest model', async () => {
+test('editing the Ollama model replaces a queued switch with the latest model', async () => {
   const f = fixture(NATIVE, { ...defaults, enabled: true })
   f.hold()
   scheduleSelection(f.engine, 'selection-chat')
   await f.fire()
-  f.preferences({ ...defaults, enabled: true, full: WORKER })
+  f.preferences({ ...defaults, enabled: true, model: WORKER })
   scheduleSelection(f.engine, 'selection-chat')
   await f.release()
   await f.fire()
@@ -372,16 +372,16 @@ test('worker, automatic, resume and stale main events do not cancel a queued exp
   }
 })
 
-test('selecting Subagents after Ollama restores the native model and retains worker settings', async () => {
+test('selecting Subagents after Ollama restores the native model and retains the shared Ollama model', async () => {
   const f = fixture(NATIVE)
   await f.manual(FULL)
   await modelSwitched(f.engine, { session_id: 'selection-chat', from_model: NATIVE, to_model: FULL, requested_model: FULL, source: 'command' } as ClassicHookInputs['PostModelSwitch'])
-  expect(await loadPreferences(f.engine, 'selection-chat')).toMatchObject({ enabled: true, mode: 'full', full: FULL })
+  expect(await loadPreferences(f.engine, 'selection-chat')).toMatchObject({ enabled: true, mode: 'full', model: FULL })
   await savePreference(f.engine, 'selection-chat', 'mode', 'subagent')
   scheduleSelection(f.engine, 'selection-chat')
   await f.fire()
   expect(f.model()).toBe(NATIVE)
-  expect(await loadPreferences(f.engine, 'selection-chat')).toMatchObject({ enabled: true, mode: 'subagent', full: FULL, subagent: WORKER })
+  expect(await loadPreferences(f.engine, 'selection-chat')).toMatchObject({ enabled: true, mode: 'subagent', model: FULL })
   cancelSelection()
 })
 
@@ -402,7 +402,7 @@ test('an idle automatic main switch reconciles the saved choice without publishi
 
 
 test('an unavailable Ollama target never emits a synthetic successful native model command', async () => {
-  const f = fixture(NATIVE, { ...defaults, enabled: true, full: 'missing:cloud' })
+  const f = fixture(NATIVE, { ...defaults, enabled: true, model: 'missing:cloud' })
   f.metadataStatus(404)
   scheduleSelection(f.engine, 'selection-chat')
   await f.fire()

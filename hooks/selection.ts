@@ -57,7 +57,7 @@ async function reconcile($: EngineInterface, request: Request): Promise<void> {
     const preferences = await getPreferences($)
     const current = await $.session.model()
     const target = preferences.enabled && preferences.mode === 'full'
-      ? preferences.full
+      ? preferences.model
       : await resolveNativeModel($, current)
     if (!target || owner !== await $.session.id() || version !== revision) return
     if (target === current) {

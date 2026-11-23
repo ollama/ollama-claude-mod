@@ -95,7 +95,7 @@ async function contextLimit($: EngineInterface, value: string, owner: string, ba
     if (connection.base !== base || await $.session.id() !== owner) return
     const modelWindow = await saveModelWindow($, connection, model, value)
     if (await $.session.id() !== owner) return
-    await updateView($, current => current.endpoint === base && current.preferences[current.preferences.mode] === model
+    await updateView($, current => current.endpoint === base && current.preferences.model === model
       ? { ...current, modelWindow, notice: '' } : current)
     await refreshConfiguredWindow($)
   } catch (error) { if (await $.session.id() === owner) await notice($, message(error)) }
@@ -212,7 +212,7 @@ export const register: Register = on => {
       if (command === 'off' || command === 'never') await persist($, { enabled: false })
       else if (command === 'full' || command === 'subagent') {
         const selected = rest.join(' ')
-        await persist($, { mode: command, enabled: true, ...(selected ? { [command]: selected } : {}) })
+        await persist($, { mode: command, enabled: true, ...(selected ? { model: selected } : {}) })
       } else if (command && command !== 'status') return { text: 'Use /ollama full MODEL, /ollama subagent MODEL, /ollama off, /ollama status, or /ollama uninstall.', isTextDisplayOnly: true }
       else if (!command) {
         await updateView($, current => ({ ...current, settingsOpen: true, openMenu: null }))
@@ -220,10 +220,7 @@ export const register: Register = on => {
       }
       const preferences = await getPreferences($)
       if (!preferences.enabled) return { text: 'Ollama off · Claude runs this chat and its subagents.', isTextDisplayOnly: true }
-      const models = preferences.mode === 'full'
-        ? `Main ${preferences.full} · Subagents ${preferences.subagent}`
-        : preferences.subagent
-      return { text: `Ollama · ${modeLabels[preferences.mode]} · ${models}`, isTextDisplayOnly: true }
+      return { text: `Ollama · ${modeLabels[preferences.mode]} · ${preferences.model}`, isTextDisplayOnly: true }
     } catch (error) { return { text: message(error), isTextDisplayOnly: true, exitCode: 1 } }
   })
 
@@ -262,7 +259,7 @@ export const register: Register = on => {
         try { await persist($, value === 'never' ? { enabled: false } : { enabled: true, mode: value }, owner) }
         catch (error) { if (await $.session.id() === owner) await notice($, message(error)) }
       },
-      setModel: value => change($, state.preferences.mode, value, owner),
+      setModel: value => change($, 'model', value, owner),
       setEffort: value => change($, state.preferences.mode === 'full' ? 'fullEffort' : 'subagentEffort', value, owner),
       setShowResponseSpeed: async show => {
         try {
@@ -281,7 +278,7 @@ export const register: Register = on => {
         if (openingModel) void refresh($, false, true).catch(() => undefined)
       },
       setEndpoint: value => endpoint($, value),
-      setContext: value => contextLimit($, value, owner, state.endpoint, state.preferences[state.preferences.mode]),
+      setContext: value => contextLimit($, value, owner, state.endpoint, state.preferences.model),
       refresh: () => refresh($, true),
     })
   })

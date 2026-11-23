@@ -12,11 +12,11 @@ export async function readSummary($: EngineInterface, state?: ViewState): Promis
   const preferences = state?.preferences ?? await getPreferences($)
   const endpoint = state ? state.endpoint : (await getConnection($)).base
   const view = state ?? await readView($)
-  const model = preferences[preferences.mode]
+  const model = preferences.model
   const window = view.modelWindow
   const override = window?.model === model && window.endpoint === endpoint ? window.override : undefined
   const settings = JSON.stringify([
-    preferences.enabled, preferences.mode, preferences.full, preferences.subagent,
+    preferences.enabled, preferences.mode, model,
     preferences.fullEffort, preferences.subagentEffort, endpoint, override,
   ])
   const key = `settings-summary-v1:${encodeURIComponent(owner)}`
