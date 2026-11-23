@@ -2,7 +2,6 @@
 
 Use local and cloud Ollama models in Claude Code, in the terminal and Claude Desktop.
 
-
 ## Install
 
 Requires Claude Code v2.1.326 or higher, a working Claude account, and Ollama running locally or available at a remote address.
@@ -11,9 +10,21 @@ Requires Claude Code v2.1.326 or higher, a working Claude account, and Ollama ru
 claude plugin install ollama --marketplace ollama/ollama-claude-mod
 ```
 
-Restart Claude Code or run the following in Claude Code after installation: 
+To install the version in a local checkout, run `claude plugin install ollama --marketplace ./` from the repository root. After either install, start a new Claude Code session or enter `/reload-plugins` in an open session.
 
-`/restart plugins`
+## Run from the terminal
+
+```sh
+# Use your saved routing mode when the mod is enabled.
+claude
+
+# Skip the Ollama mod for this session.
+claude --settings '{"enabledPlugins":{"ollama@ollama":false}}'
+```
+
+`ollama@ollama` identifies the `ollama` plugin in the `ollama` marketplace. Append `-p "your prompt"` to either command for a single response. In an interactive session with the mod loaded, `/ollama off` routes the conversation and its subagents to Claude and keeps the Ollama controls available.
+
+If you start Claude Code with `ollama launch claude`, Ollama's launcher controls the model and connection. The mod stays inactive for that session.
 
 ## Get started
 
@@ -27,39 +38,44 @@ Soon you’ll be able to choose one Ollama model for the conversation and anothe
 
 The mod applies your Ollama model and effort when it sends a request to Ollama. Claude Code keeps the model selected for the chat or subagent and uses that selection for its own usage reports and context window. You can change the session model with Claude's built-in `/model` picker. The Ollama bar shows the conversation model when Ollama is enabled. In **Subagents**, it can read Claude's initial effort from the current Desktop chat's saved selection before the first request. With **Off** selected, Claude's own status line shows the model and effort.
 
-| Setting | Conversation | Subagents |
+| Mode | Conversation | Subagents |
 |---|---|---|
 | **Full** | Selected Ollama model | Selected Ollama model |
 | **Subagents** | Claude | Selected Ollama model |
 | **Off** | Claude | Claude |
 
-With `ollama launch claude`, the launcher controls the model and connection. The mod leaves that session’s prompts, requests, and interface to the launcher.
-
 New chats inherit your last saved model, mode, and effort. Resuming an existing chat restores its own setup. The model picker includes local models and available Ollama cloud models. Type to search.
 
-Settings shows the model and its supported effort options. Open **Advanced** for context length, the Ollama address, and request usage. Select the X to close settings and return to the compact status and worker activity. The compact mode button stays available after the first message. Errors remain visible when settings are closed. Workers show **Starting…** until their first response confirms the model.
+The settings panel shows the Ollama model and its supported effort options. The mode selector stays in the status bar while settings are open. Select the X to close the panel. Select the subagent count to expand or collapse worker activity. Workers show **Starting…** until their first response confirms the model. Errors remain visible when settings are closed.
 
-The context length picker selects the running allocation or the configured default. **(Default)** marks a verified default from the model or the local Ollama app. Selecting the running allocation or the marked default clears the plugin's saved limit. If the model is running with a larger allocation, you can select its configured size as an explicit limit. **Auto** appears when Ollama hasn't reported a size.
+Open **Advanced** for context length, the Ollama address, and request usage. The context length picker offers **64K**, **128K**, **256K**, **512K**, and **1M** up to the reported limit. It also includes the running allocation and any configured default within that limit. Choosing the running allocation or the value marked **(Default)** clears the mod's saved limit. If the running allocation is larger than the configured default, choosing the smaller value sets an explicit limit. **Auto** appears when Ollama hasn't reported a size.
 
 To show tokens per second in the status bar, set **Response speed** to **On** under **Settings → Advanced**. It starts off and applies across chats.
 
 ### Commands
 
+Enter these in an interactive Claude Code session with the mod loaded.
+
 ```text
 /ollama                   Open settings
-/ollama model [MODEL]     Open the model picker or set the shared Ollama model
-/ollama full              Enable Full with the selected Ollama model
-/ollama subagent          Enable Subagents with the selected Ollama model
+/ollama model             Open the Ollama model picker
+/ollama model MODEL       Use MODEL in both Ollama routing modes
+/ollama full              Use Ollama for the conversation and its subagents
+/ollama subagent          Use Ollama for subagents only
 /ollama off               Select Off and keep the saved Ollama model
-/ollama status            Show the current setup
+/ollama status            Show the current routing setup
 ```
 
 Ask Claude to use subagents normally. The plugin applies your selection to native Agent calls.
 
 ## Uninstall
 
-In the Claude Code terminal, enter `/ollama uninstall`, then restart Claude Code. This removes the plugin and its entries from `/model`. Your saved chat preferences and picker entries you added or edited are kept.
+Run Claude Code's plugin manager from your shell to uninstall the mod and keep your saved chat preferences.
 
-The command defaults to a user install. For a project or local install, run `/ollama uninstall project` or `/ollama uninstall local` in that project. Shared picker entries are removed when the last install is gone.
+```sh
+claude plugin uninstall ollama@ollama --keep-data
+```
 
-Claude’s built-in uninstall has no plugin cleanup hook. If you already removed the last install through Claude, run `node scripts/model-picker.mjs uninstall` from this repository to finish cleaning up the picker.
+The default scope is `user`. For a project or local install, run the command from that project with `--scope project` or `--scope local`. Omit `--keep-data` to delete the mod's saved data when you remove its last installation. Start a new Claude Code session or run `/reload-plugins` to apply the change.
+
+If Ollama entries still appear in Claude's `/model` picker after you remove the last installation, run `node scripts/model-picker.mjs uninstall` from this repository with Node.js 22.18 or later. It removes the entries the mod added and preserves entries you added or edited.
