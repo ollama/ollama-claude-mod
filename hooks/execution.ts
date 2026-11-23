@@ -4,7 +4,7 @@ import { getPreferences, readView, updateView } from './runtime'
 import { getConnection, prepareRequest, OllamaConnectionError, OllamaRequestError } from './ollama'
 import { invalidateStaleConnection } from './discovery'
 import type { Connection } from './ollama'
-import { toOllamaBody, toolResultsMatch, wholeRequest, withoutUnsignedThinking, workflowContinuation } from './route'
+import { toOllamaBody, toolResultsMatch, wholeRequest, withoutUnsignedThinking, workerContinuation } from './route'
 import { captureWindow, releaseWindow } from './window'
 import { isOllamaModel } from './models'
 import { activityTime, recordOllamaUsage, startAgentActivity, startMainActivity, updateAgentActivity, updateMainActivity } from './activity'
@@ -25,7 +25,8 @@ type Run = {
   worker?: boolean
   accepted: boolean
   lastRequest?: Body
-  workflowReply?: Parameters<typeof workflowContinuation>[1]
+  workflow?: boolean
+  workerReply?: Parameters<typeof workerContinuation>[1]
   output?: number
   measuredOutput?: number
   duration?: number
@@ -50,8 +51,10 @@ async function fail($: EngineInterface, run: Run, phase: string, reason: string,
     : status === 404 && phase === 'preparation' ? 'Ollama could not find this model. Check the model in Settings.'
     : status === 413 ? 'The request is too large. Shorten the conversation and try again.'
     : status !== undefined && status >= 500 ? 'Ollama is unavailable. Try again later.'
+    : phase === 'history' ? `${reason} ${run.workflow ? 'Rerun the workflow.' : run.worker ? 'Rerun this subagent.' : 'Start a new conversation.'}`
     : reason
   run.failure = phase === 'connection' ? detail
+    : phase === 'history' ? `Ollama history failed: ${detail}`
     : `Ollama ${phase} failed${status ? ` (HTTP ${status})` : ''}: ${detail} Change model with /model or Ollama settings, then start a new turn.`
   const model = run.model.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 200)
   if (phase === 'connection' && run.connection) invalidateStaleConnection(run.connection.base, false)
@@ -66,7 +69,8 @@ async function fail($: EngineInterface, run: Run, phase: string, reason: string,
       }
     } catch { /* Keep the original failure when the host cannot display a notice. */ }
   }
-  if (firstFailure && run.noticeRevision !== undefined) {
+  // A worker's history error belongs with that worker in the transcript.
+  if (firstFailure && run.noticeRevision !== undefined && !(run.worker && phase === 'history')) {
     const owner = run.sessionId
     const effort = run.worker ? 'subagentEffort' : 'fullEffort'
     try {
@@ -82,7 +86,8 @@ async function fail($: EngineInterface, run: Run, phase: string, reason: string,
             if (current.endpoint && current.endpoint !== run.connection.base) return current
             return { ...current, connected: false, connectionIssue: detail, notice: '' }
           }
-          return { ...current, notice: `Ollama ${model} · ${phase}${status ? ` · HTTP ${status}` : ''}: ${detail} Change model with /model or Ollama settings.` }
+          const hint = phase === 'history' ? '' : ' Change model with /model or Ollama settings.'
+          return { ...current, notice: `Ollama ${model} · ${phase}${status ? ` · HTTP ${status}` : ''}: ${detail}${hint}` }
         })
       }
     } catch { /* A notice must not replace or hide the original request failure. */ }
@@ -186,7 +191,7 @@ export async function executionSpawn($: Parameters<Hook<'agent.spawn'>>[0], e: P
     throw error
   }
   if (started.agentId && run && !agents.has(started.agentId)) {
-    if (e.workflow && run.model) run.workflowReply = []
+    run.workflow = Boolean(e.workflow)
     agents.set(started.agentId, run)
     await startAgentActivity($, run.sessionId, { id: started.agentId, model: run.model || '', confirmed: false, task: (e.description || e.prompt).replace(/\s+/g, ' ').trim().slice(0, 160), tokens: 0, running: true })
   }
@@ -194,12 +199,12 @@ export async function executionSpawn($: Parameters<Hook<'agent.spawn'>>[0], e: P
   return started
 }
 
-export const recordWorkflowResponse: Hook<'session.append'> = async (_, e, next) => {
+export const recordWorkerResponse: Hook<'session.append'> = async (_, e, next) => {
   const run = e.agentId ? agents.get(e.agentId) : undefined
-  if (!run?.accepted || !run.workflowReply || e.message.role !== 'assistant') return next(e)
+  if (!run?.accepted || !run.workerReply || e.message.role !== 'assistant') return next(e)
 
   // Reserve the row's position before awaiting the host's final content.
-  const rows = run.workflowReply
+  const rows = run.workerReply
   const index = rows.length
   rows.push(undefined)
   const result = await next(e)
@@ -400,15 +405,15 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   if (next.signal.aborted) return { deny: 'Request cancelled.' }
   if (!run.connection) return fail($, run, 'connection', INVALID_CONNECTION)
   if (body.thread !== undefined && body.thread.type !== 'create' && body.thread.type !== 'continue') {
-    return fail($, run, 'history', 'This conversation continuation is not supported. Start a new conversation.')
+    return fail($, run, 'history', 'This conversation continuation is not supported.')
   }
   let whole: Body = { ...body, thread: undefined }
-  if (continued && run.workflowReply) {
-    // session.messages({ agentId }) cannot read agents filed under a workflow.
-    const restored = workflowContinuation(run.lastRequest, run.workflowReply, body)
-    if (!restored) return fail($, run, 'history', 'The workflow agent’s previous reply could not be matched to this request. Rerun the workflow.')
+  const restored = continued && run.workerReply?.length ? workerContinuation(run.lastRequest, run.workerReply, body) : undefined
+  if (restored) {
     whole = restored
   } else if (continued) {
+    // The transcript API cannot read workers filed under a workflow.
+    if (run.workflow) return fail($, run, 'history', 'The workflow agent’s previous reply could not be matched to this request.')
     const added = body.messages ?? []
     const entry = history.get(historyKey(run, loop))
     let before = entry?.request
@@ -419,18 +424,19 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
     }
     // With no cached system/tools we cannot safely invent a full payload.
     // Stop before sending any inference request.
-    if (!before) return fail($, run, 'history', 'The conversation template is unavailable. Start a new conversation.')
+    if (!before) return fail($, run, 'history', 'The conversation template is unavailable.')
     try {
       const transcript = await $.session.messages({ as: 'api', ...(loop !== MAIN ? { agentId: loop } : {}) })
       const messages = Array.isArray(transcript) ? transcript : []
       const lastAssistant = messages.findLastIndex(message => message.role === 'assistant')
       const reply = messages[lastAssistant]
       if (next.signal.aborted) return { deny: 'Request cancelled.' }
-      if (!reply) return fail($, run, 'history', 'The previous assistant response is unavailable. Start a new conversation.')
+      if (!reply) return fail($, run, 'history', run.workerReply?.length
+        ? 'The subagent’s previous reply could not be matched to this request.' : 'The previous assistant response is unavailable.')
       const userUpdate = added.some(message => message.role === 'user') &&
         added.every(message => message.role === 'user' || message.role === 'system')
       if (userUpdate) {
-        if (!run.lastRequest && !toolResultsMatch(reply, added)) {
+        if ((run.worker || !run.lastRequest) && !toolResultsMatch(reply, added)) {
           return fail($, run, 'history', 'The tool results do not match the previous assistant response.')
         }
         // Keep the exact wire prefix when its reply still ends this conversation.
@@ -443,11 +449,11 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
       else if (added.length && JSON.stringify(messages.slice(-added.length)) === JSON.stringify(added)) {
         whole = { ...before, ...body, system: before.system, tools: body.tools ?? before.tools, thread: undefined, messages }
       }
-      else return fail($, run, 'history', 'This continuation cannot be reconstructed safely. Start a new conversation.')
+      else return fail($, run, 'history', 'This continuation cannot be reconstructed safely.')
       if (run.sessionId !== await $.session.id()) return { deny: 'The chat changed before its continuation could be sent.' }
     } catch (error) {
       if (next.signal.aborted) return { deny: 'Request cancelled.' }
-      return fail($, run, 'history', 'The conversation history could not be read. Start a new conversation.')
+      return fail($, run, 'history', 'The conversation history could not be read.')
     }
   }
   if (whole.tools?.some(tool => tool.allowed_domains?.length || tool.blocked_domains?.length)) {
@@ -474,7 +480,7 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   // subsequent read failures or replay any output/tool effects.
   if (response.value?.ok) {
     run.accepted = true
-    if (run.workflowReply) run.workflowReply = []
+    if (run.worker) run.workerReply = []
     if (run.previousConnectionIssue && run.previousConnectionIssue === new OllamaConnectionError(run.connection.base).message) {
       const base = run.connection.base
       invalidateStaleConnection(base, true)
