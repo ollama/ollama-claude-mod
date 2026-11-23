@@ -19,6 +19,8 @@ Restart Claude Code or run the following in Claude Code after installation:
 
 New installs start in **Subagents** mode. Claude runs the conversation and **Inkling 2 Small** (`inkling-2-small:cloud`) runs its subagents. Until you pick a model, switching to **Full** selects **Kimi K3.1 Pro** (`kimi-k3.1-pro:cloud`) for both.
 
+Soon you’ll be able to choose one Ollama model for the conversation and another for its subagents.
+
 1. Run `/ollama` or select the three dots beside the mode picker to open Ollama settings.
 2. Use the mode selector above the prompt to choose **Full** for Ollama in the conversation and subagents, or **Subagents** to keep Claude in the conversation.
 3. To use the same Ollama model in either mode, choose it in settings or run `/ollama model MODEL`. An explicit choice stays selected when you switch modes, even if you picked the suggested model. Select **Off** whenever you want Claude for both roles.
