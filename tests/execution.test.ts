@@ -531,12 +531,17 @@ test('a fresh turn sends the exact user and system update once with its conversa
   }
 })
 
-test('a restored tool continuation must match the preceding assistant call', async () => {
-  for (const resultId of ['call-1', 'different-call']) {
+test('cached and restored tool continuations must match the preceding assistant call', async () => {
+  for (const [cached, resultId] of [[false, 'call-1'], [false, 'different-call'], [true, 'call-1'], [true, 'different-call']] as const) {
     const f = fixture()
-    f.stored.set(`request-template-v1:${JSON.stringify([f.id, 'main'])}`, { version: 1, system: 'system' })
+    if (cached) {
+      await f.step(f.id, 'claude-original', async model => { await executionFetch(f.engine, f.request(model), f.transport) })
+    } else {
+      f.stored.set(`request-template-v1:${JSON.stringify([f.id, 'main'])}`, { version: 1, system: 'system' })
+    }
+    const sentBefore = f.sent.length
     const reply = { role: 'assistant', content: [{ type: 'tool_use', id: 'call-1', name: 'Read', input: {} }] }
-    const first = { role: 'user', content: 'read the fixture' }
+    const first = { role: 'user', content: 'hello' }
     f.engine.session.messages = (async () => [first, reply]) as unknown as typeof f.engine.session.messages
     const delta = [
       { role: 'user', content: [{ type: 'tool_result', tool_use_id: resultId, content: 'fixture text' }] },
@@ -548,10 +553,10 @@ test('a restored tool continuation must match the preceding assistant call', asy
       const result = await executionFetch(f.engine, { ...request, init: { ...request.init, body } }, f.transport)
       if (resultId === 'call-1') {
         expect(result).toBe(ok)
-        expect(JSON.parse(String(f.sent[0]?.init?.body)).messages).toEqual([first, reply, ...delta])
+        expect(JSON.parse(String(f.sent.at(-1)?.init?.body)).messages).toEqual([first, reply, ...delta])
       } else {
         expect(result.deny).toContain('tool results do not match')
-        expect(f.sent).toHaveLength(0)
+        expect(f.sent).toHaveLength(sentBefore)
       }
     })
   }
