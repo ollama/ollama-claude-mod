@@ -10,22 +10,6 @@ Requires Claude Code v2.1.326 or higher, a working Claude account, and Ollama ru
 claude plugin install ollama --marketplace ollama/ollama-claude-mod
 ```
 
-To install the version in a local checkout, run `claude plugin install ollama --marketplace ./` from the repository root. After either install, start a new Claude Code session or enter `/reload-plugins` in an open session.
-
-## Run from the terminal
-
-```sh
-# Use your saved routing mode when the mod is enabled.
-claude
-
-# Skip the Ollama mod for this session.
-claude --settings '{"enabledPlugins":{"ollama@ollama":false}}'
-```
-
-`ollama@ollama` identifies the `ollama` plugin in the `ollama` marketplace. Append `-p "your prompt"` to either command for a single response. In an interactive session with the mod loaded, `/ollama off` routes the conversation and its subagents to Claude and keeps the Ollama controls available.
-
-If you start Claude Code with `ollama launch claude`, Ollama's launcher controls the model and connection. The mod stays inactive for that session.
-
 ## Get started
 
 New installs start in **Subagents** mode. Claude runs the conversation and **Inkling 2 Small** (`inkling-2-small:cloud`) runs its subagents. Until you pick a model, switching to **Full** selects **Kimi K3.1 Pro** (`kimi-k3.1-pro:cloud`) for both.
@@ -79,3 +63,17 @@ claude plugin uninstall ollama@ollama --keep-data
 The default scope is `user`. For a project or local install, run the command from that project with `--scope project` or `--scope local`. Omit `--keep-data` to delete the mod's saved data when you remove its last installation. Start a new Claude Code session or run `/reload-plugins` to apply the change.
 
 If Ollama entries still appear in Claude's `/model` picker after you remove the last installation, run `node scripts/model-picker.mjs uninstall` from this repository with Node.js 22.18 or later. It removes the entries the mod added and preserves entries you added or edited.
+
+## Run from the terminal
+
+```sh
+# Use your saved routing mode when the mod is enabled.
+claude
+
+# Skip the Ollama mod for this session.
+claude --settings '{"enabledPlugins":{"ollama@ollama":false}}'
+```
+
+`ollama@ollama` identifies the `ollama` plugin in the `ollama` marketplace. Append `-p "your prompt"` to either command for a single response. In an interactive session with the mod loaded, `/ollama off` routes the conversation and its subagents to Claude and keeps the Ollama controls available.
+
+If you start Claude Code with `ollama launch claude`, Ollama's launcher controls the model and connection. The mod stays inactive for that session.
