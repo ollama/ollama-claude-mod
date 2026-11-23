@@ -436,7 +436,7 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
       const userUpdate = added.some(message => message.role === 'user') &&
         added.every(message => message.role === 'user' || message.role === 'system')
       if (userUpdate) {
-        if ((run.worker || !run.lastRequest) && !toolResultsMatch(reply, added)) {
+        if (!toolResultsMatch(reply, added)) {
           return fail($, run, 'history', 'The tool results do not match the previous assistant response.')
         }
         // Keep the exact wire prefix when its reply still ends this conversation.
