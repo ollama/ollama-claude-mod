@@ -276,6 +276,7 @@ export const register: Register = on => {
         const openingModel = openMenu?.key === 'model' && (await readView($)).openMenu?.key !== 'model'
         await updateView($, current => ({ ...current, openMenu }))
         if (openingModel) void refresh($, false, true).catch(() => undefined)
+        if (openMenu?.key === 'advanced' && state.connected) await refreshConfiguredWindow($).catch(() => undefined)
       },
       setEndpoint: value => endpoint($, value),
       setContext: value => contextLimit($, value, owner, state.endpoint, state.preferences.model),

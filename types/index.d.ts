@@ -21,7 +21,7 @@ export type OllamaModel = {
   isDecision: boolean
 }
 
-export type ModelWindow = { model?: string; endpoint?: string; maximum?: number; detected?: number; effective?: number; override?: number; source: 'cloud' | 'running' | 'parameters' | 'manual' | 'unknown' }
+export type ModelWindow = { model?: string; endpoint?: string; maximum?: number; detected?: number; defaultContext?: number; effective?: number; override?: number; source: 'cloud' | 'running' | 'parameters' | 'manual' | 'unknown' }
 
 export type OpenMenu = { key: string; query?: string } | null
 

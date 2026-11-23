@@ -35,6 +35,8 @@ New chats inherit your last saved setup. Selecting **Off** keeps the Ollama mode
 
 Settings shows the model and its supported effort options. Open **Advanced** for context length, the Ollama address, and request usage. Select the X to close settings and return to the compact status and worker activity. The compact mode button stays available after the first message. Errors remain visible when settings are closed; a failed model switch includes **Retry**. Workers show **Starting…** until their first response confirms the model.
 
+The context length picker selects the running allocation or the configured default. **(Default)** marks a verified default from the model or the local Ollama app. Selecting the running allocation or the marked default clears the plugin's saved limit. If the model is running with a larger allocation, you can select its configured size as an explicit limit. **Auto** appears when Ollama hasn't reported a size.
+
 To show tokens per second in the status bar, set **Response speed** to **On** under **Settings → Advanced**. It starts off and applies across chats.
 
 ### Commands
