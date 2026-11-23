@@ -396,6 +396,85 @@ test('switching off drops thinking-only Ollama replies from the native conversat
   expect(JSON.parse(String(f.sent[0]?.init?.body)).messages).toEqual([{ role: 'user', content: 'hello' }, followUp])
 })
 
+test('a fresh turn sends the exact user and system update once with its conversation history', async () => {
+  for (const history of ['live', 'reloaded', 'rewound', 'advanced'] as const) {
+    const f = fixture()
+    const system = [{ type: 'text', text: 'original system' }]
+    const tools = [{ name: 'Read', input_schema: {} }]
+    const first = { role: 'user', content: [{ type: 'text', text: 'remember 37' }] }
+    const earlierUpdate = { role: 'system', content: [{ type: 'text', text: 'earlier inline instruction' }] }
+    const reply = { role: 'assistant', content: [{ type: 'text', text: '37' }] }
+    const followUp = { role: 'user', content: [{ type: 'text', text: 'i see.' }] }
+    const decorated = { role: 'user', content: [{ ...followUp.content[0], cache_control: { type: 'ephemeral' } }] }
+    const effort = { role: 'system', content: [{ type: 'text', text: 'Ultracode is still on.' }] }
+    const prefix = history === 'advanced' ? [first, reply, { role: 'user', content: 'another turn' }]
+      : history === 'rewound' ? [{ role: 'user', content: 'different branch' }] : [first]
+    const lastReply = history === 'advanced' ? { role: 'assistant', content: 'native reply' } : reply
+    f.engine.session.messages = (async (args: { as?: string; after?: string; last?: number }) => {
+      if (args.last) return [{ role: 'assistant', uuid: 'previous-row' }]
+      if (args.after) {
+        expect(args.after).toBe('previous-row')
+        if (history === 'rewound') return { deny: 'row was rewound' }
+        if (history === 'advanced') return [lastReply, followUp]
+        return [followUp]
+      }
+      return [...prefix, lastReply, followUp]
+    }) as unknown as typeof f.engine.session.messages
+
+    async function send(model: string, fields: object) {
+      const request = f.request(model)
+      const body = { model, ...fields }
+      return executionFetch(f.engine, { ...request, init: { ...request.init, body: JSON.stringify(body) } }, f.transport)
+    }
+    if (history === 'reloaded') {
+      f.stored.set(`request-template-v1:${JSON.stringify([f.id, 'main'])}`, { version: 1, system, tools })
+    } else {
+      await f.step(f.id, 'claude-original', async model => {
+        await send(model, { thread: { type: 'create' }, system, tools, messages: [first, earlierUpdate] })
+      })
+      await executionComplete(f.engine, { turnId: f.id, answer: '37', durationMs: 1, isAborted: false, reason: 'answer' },
+        (async () => ({ text: '37' })) as unknown as Parameters<Hook<'turn.complete'>>[2])
+    }
+    const priorRequests = f.sent.length
+    await f.step(`${f.id}-next`, 'claude-original', async model => {
+      expect(await send(model, { thread: { type: 'continue', previous_message_id: 'msg_previous' }, messages: [decorated, effort] })).toBe(ok)
+    })
+    expect(f.sent.length).toBe(priorRequests + 1)
+    expect(f.sent.at(-1)?.url).toBe('http://127.0.0.1:11434/v1/messages')
+    const sent = JSON.parse(String(f.sent.at(-1)?.init?.body))
+    expect(sent.thread).toBeUndefined()
+    expect(sent.system).toEqual(system)
+    expect(sent.tools).toEqual(tools)
+    expect(sent.messages).toEqual([...(history === 'live' ? [first, earlierUpdate] : prefix), lastReply, decorated, effort])
+  }
+})
+
+test('a restored tool continuation must match the preceding assistant call', async () => {
+  for (const resultId of ['call-1', 'different-call']) {
+    const f = fixture()
+    f.stored.set(`request-template-v1:${JSON.stringify([f.id, 'main'])}`, { version: 1, system: 'system' })
+    const reply = { role: 'assistant', content: [{ type: 'tool_use', id: 'call-1', name: 'Read', input: {} }] }
+    const first = { role: 'user', content: 'read the fixture' }
+    f.engine.session.messages = (async () => [first, reply]) as unknown as typeof f.engine.session.messages
+    const delta = [
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: resultId, content: 'fixture text' }] },
+      { role: 'system', content: [{ type: 'text', text: 'updated context' }] },
+    ]
+    await f.step(f.id, 'claude-original', async model => {
+      const request = f.request(model)
+      const body = JSON.stringify({ model, thread: { type: 'continue' }, messages: delta })
+      const result = await executionFetch(f.engine, { ...request, init: { ...request.init, body } }, f.transport)
+      if (resultId === 'call-1') {
+        expect(result).toBe(ok)
+        expect(JSON.parse(String(f.sent[0]?.init?.body)).messages).toEqual([first, reply, ...delta])
+      } else {
+        expect(result.deny).toContain('tool results do not match')
+        expect(f.sent).toHaveLength(0)
+      }
+    })
+  }
+})
+
 test('failed continuation is sent once to Ollama with the whole conversation', async () => {
   const f = fixture()
   await f.step(f.id, 'claude-original', async model => { await executionFetch(f.engine, f.request(model), f.transport) })
