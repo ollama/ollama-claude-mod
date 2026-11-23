@@ -21,8 +21,10 @@ function setup(on: On, initialState = initial) {
   let sessionId = 'ui-test'
   let connectionRead: (() => Promise<unknown>) | undefined
   let failedStoreKey = ''
+  let desktopContext = ''
   const values = new Map<string, unknown>([['preferences:ui-test', { version: 1, value: state.preferences }], ['connection-v1', state.endpoint]])
   values.set(`model-discovery-v1:${encodeURIComponent(state.endpoint)}`, state.models.filter(model => !model.isDecision))
+  if (state.modelWindow?.override) values.set(`context-override-v1:${encodeURIComponent(JSON.stringify([state.endpoint, state.modelWindow.model]))}`, state.modelWindow.override)
   const writes: string[] = []
   const processes: Parameters<Hook<'process.run'>>[1][] = []
   const clock = mock.clock(on)
@@ -30,7 +32,8 @@ function setup(on: On, initialState = initial) {
   on('http.fetch', ($, e, next) => fetch($, e, next))
   on('process.run', (_, e) => {
     processes.push(e)
-    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    const stdout = e.argv[1]?.endsWith('/desktop-context.mjs') ? desktopContext : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', () => ({ value: sessionId }))
   on('env.get', () => ({ value: undefined }))
@@ -56,6 +59,7 @@ function setup(on: On, initialState = initial) {
   })
   return {
     writes, values, clock, processes,
+    desktopContext: (size: number) => { desktopContext = String(size) },
     http: (handler: Hook<'http.fetch'>) => { fetch = handler },
     session: (id: string) => { sessionId = id },
     connection: (read: () => Promise<unknown>) => { connectionRead = read },
@@ -366,7 +370,10 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await ui.find({ type: 'Text', text: 'Ollama runs this chat and its subagents.' })).toBeUndefined()
     expect(await ui.find({ key: 'model' })).toBeDefined()
     expect(await ui.find({ key: 'endpoint' })).toBeDefined()
-    expect((await ui.find({ key: `context-${initial.endpoint}-first` }))?.props).toMatchObject({ value: '16384', submitLabel: surface === 'terminal' ? '' : 'Save' })
+    const context = await ui.find({ key: `context-${initial.endpoint}-first` })
+    expect(context).toMatchObject({ type: 'Select', props: { value: '16384' } })
+    expect(context!.props.options).toContainEqual({ value: '16384', label: '16K' })
+    expect(context!.props.options).toContainEqual({ value: 'auto', label: 'Auto' })
     expect((await ui.find({ key: 'endpoint' }))?.props.submitLabel).toBe(surface === 'terminal' ? '' : 'Save')
     expect(await ui.find({ type: 'Text', text: '16384 tokens · Manual' })).toBeUndefined()
     expect(writes).toEqual([])
@@ -605,30 +612,114 @@ test('/ollama opens settings without changing saved preferences or toggling clos
   expect(writes).toEqual([])
 })
 
-test('context edits apply to their model without publishing chat defaults or leaking into another model', async ($, on) => {
-  const f = setup(on, { ...initial, modelWindow: { model: 'first', endpoint: initial.endpoint, effective: 32768, source: 'parameters' } })
+test('the context picker saves supported presets per model and restores the reported default', async ($, on) => {
+  const f = setup(on, { ...initial, modelWindow: { model: 'first', endpoint: initial.endpoint,
+    detected: 200_000, effective: 200_000, maximum: 1_048_576, source: 'parameters' } })
   f.http((_, e) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(e.url.endsWith('/api/ps')
     ? { models: [] }
-    : { capabilities: ['tools'], parameters: 'num_ctx 32768', model_info: { 'test.context_length': 65536 } }) } }))
+    : { capabilities: ['tools'], parameters: 'num_ctx 200000', model_info: { 'test.context_length': 1_048_576 } }) } }))
   const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'context-edit', props })
   await ui.press({ key: 'settings' })
-    await ui.press({ key: 'advanced' })
+  await ui.press({ key: 'advanced' })
   const key = `context-${initial.endpoint}-first`
-  expect((await ui.find({ key }))?.props.value).toBe('32768')
-  await ui.input({ key, text: '32768' })
+  expect(await ui.find({ key })).toMatchObject({ type: 'Select', props: { value: '200000', options: [
+    { value: '65536', label: '64K' }, { value: '131072', label: '128K' }, { value: '200000', label: '200K (Default)' },
+  ] } })
+  await ui.select({ key, value: '200000' })
   expect(f.writes).toEqual([])
-  await ui.input({ key, text: '16384' })
-  expect((await ui.find({ key }))?.props.value).toBe('16384')
-  expect(await ui.find({ type: 'Text', text: '16384 tokens · Manual' })).toBeUndefined()
-  expect(f.values.has('preference-defaults-v1')).toBe(false)
-  expect(f.writes.every(value => value.startsWith('context-override-v1:'))).toBe(true)
-  await ui.input({ key, text: '' })
-  expect((await ui.find({ key }))?.props.value).toBe('32768')
+  await ui.select({ key, value: '131072' })
+  expect((await ui.find({ key }))?.props.value).toBe('131072')
+  const override = `context-override-v1:${encodeURIComponent(JSON.stringify([initial.endpoint, 'first']))}`
+  expect(f.values.get(override)).toBe(131_072)
+  expect(f.writes).toEqual([override])
+  await ui.select({ key, value: '200000' })
+  expect(f.values.has(override)).toBe(false)
+  expect((await ui.find({ key }))?.props.value).toBe('200000')
+  await ui.select({ key, value: '65536' })
   await ui.press({ key: 'model' })
   await ui.press({ key: 'model-option-second' })
   await ui.press({ key: 'advanced' })
-  expect((await ui.find({ key: `context-${initial.endpoint}-second` }))?.props.value).not.toBe('16384')
-  expect(await ui.find({ type: 'Text', text: '16384 tokens · Manual' })).toBeUndefined()
+  expect((await ui.find({ key: `context-${initial.endpoint}-second` }))?.props.value).toBe('200000')
+  expect(f.values.get(override)).toBe(65_536)
+  await ui.unmount()
+})
+
+test('Advanced selects the desktop server setting for an unloaded model and rechecks the running allocation', async ($, on) => {
+  const f = setup(on, { ...initial, settingsOpen: true })
+  let running = 0
+  f.http((_, e) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(e.url.endsWith('/api/ps')
+    ? { models: running ? [{ name: 'first', context_length: running }] : [] }
+    : { capabilities: ['tools'], model_info: { 'test.context_length': 262_144 } }) } }))
+  f.desktopContext(131_072)
+  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'context-auto', props })
+  const key = `context-${initial.endpoint}-first`
+  await ui.press({ key: 'advanced' })
+  expect((await ui.find({ key }))?.props).toMatchObject({ value: '131072', options: [
+    { value: '65536', label: '64K' }, { value: '131072', label: '128K (Default)' }, { value: '262144', label: '256K' },
+  ] })
+  expect(f.writes).toEqual([])
+  running = 131_072
+  await ui.press({ key: 'advanced' })
+  await ui.press({ key: 'advanced' })
+  expect((await ui.find({ key }))?.props).toMatchObject({ value: '131072', options: [
+    { value: '65536', label: '64K' }, { value: '131072', label: '128K (Default)' },
+  ] })
+  running = 65_536
+  await ui.press({ key: 'advanced' })
+  await ui.press({ key: 'advanced' })
+  expect((await ui.find({ key }))?.props).toMatchObject({ value: '65536', options: [{ value: '65536', label: '64K' }] })
+  expect(f.writes).toEqual([])
+  await ui.unmount()
+})
+
+test('a supported nonpreset model default can be selected below a larger running allocation', async ($, on) => {
+  const f = setup(on, { ...initial, settingsOpen: true })
+  f.http((_, e) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(e.url.endsWith('/api/ps')
+    ? { models: [{ name: 'first', context_length: 262_144 }] }
+    : { capabilities: ['tools'], parameters: 'num_ctx 200000', model_info: { 'test.context_length': 262_144 } }) } }))
+  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'context-declared', props })
+  await ui.press({ key: 'advanced' })
+  const key = `context-${initial.endpoint}-first`
+  expect((await ui.find({ key }))?.props.value).toBe('262144')
+  expect((await ui.find({ key }))?.props.options).toContainEqual({ value: '200000', label: '200K' })
+  await ui.select({ key, value: '200000' })
+  expect(f.values.get(`context-override-v1:${encodeURIComponent(JSON.stringify([initial.endpoint, 'first']))}`)).toBe(200_000)
+  await ui.unmount()
+})
+
+test('the context picker lists all five presets at 1M and retains an existing custom limit', async ($, on) => {
+  const f = setup(on, { ...initial, settingsOpen: true, openMenu: { key: 'advanced' },
+    modelWindow: { model: 'first', endpoint: initial.endpoint, detected: 1_048_576, defaultContext: 1_048_576, maximum: 1_048_576,
+      effective: 197_117, override: 197_117, source: 'manual' } })
+  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'context-presets', props })
+  expect(await ui.find({ key: `context-${initial.endpoint}-first` })).toMatchObject({ type: 'Select', props: { value: '197117', options: [
+    { value: '65536', label: '64K' }, { value: '131072', label: '128K' }, { value: '197117', label: '197,117' },
+    { value: '262144', label: '256K' }, { value: '524288', label: '512K' }, { value: '1048576', label: '1M (Default)' },
+  ] } })
+  // A smaller reported capacity caps the effective window without erasing the saved limit.
+  Object.assign(f.state().modelWindow!, { detected: 131_072, effective: 131_072 })
+  await ui.redraw(props)
+  expect((await ui.find({ key: `context-${initial.endpoint}-first` }))?.props.options).toContainEqual({
+    value: '197117', label: '197,117 (using 128K)',
+  })
+  expect(f.writes).toEqual([])
+  await ui.unmount()
+})
+
+test('a saved limit equal to the current default can be released', async ($, on) => {
+  const f = setup(on, { ...initial, settingsOpen: true, openMenu: { key: 'advanced' },
+    modelWindow: { model: 'first', endpoint: initial.endpoint, detected: 65_536, defaultContext: 65_536, effective: 65_536, override: 65_536, source: 'manual' } })
+  const override = `context-override-v1:${encodeURIComponent(JSON.stringify([initial.endpoint, 'first']))}`
+  f.http((_, e) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(e.url.endsWith('/api/ps')
+    ? { models: [] } : { capabilities: ['tools'], parameters: 'num_ctx 65536' }) } }))
+  const key = `context-${initial.endpoint}-first`
+  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'context-pinned', props })
+  expect((await ui.find({ key }))?.props).toMatchObject({ value: '65536', options: [
+    { value: '65536', label: '64K (Default)' },
+  ] })
+  await ui.select({ key, value: '65536' })
+  expect(f.values.has(override)).toBe(false)
+  expect((await ui.find({ key }))?.props.value).toBe('65536')
   await ui.unmount()
 })
 

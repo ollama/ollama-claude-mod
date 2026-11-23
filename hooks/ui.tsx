@@ -1,5 +1,5 @@
 import type { EngineInterface, RenderElement, RenderInput } from 'claude-code'
-import type { ActivityState, Mode, OpenMenu, SubagentActivity, Thinking, ViewState } from '../types'
+import type { ActivityState, Mode, ModelWindow, OpenMenu, SubagentActivity, Thinking, ViewState } from '../types'
 import { activityElements, displayName, setPulse, shownSubagents, tokenCount } from './activity-view'
 import { pickerMenu } from './menu'
 import type { Menu } from './menu'
@@ -30,6 +30,33 @@ const effortLabels: Record<Thinking, string> = {
 
 export const modeLabels: Record<Mode | 'never', string> = { full: 'Full', subagent: 'Subagents', never: 'Off' }
 const modeOptions = Object.entries(modeLabels).map(([value, label]) => ({ value, label }))
+
+const contextPresets = [65_536, 131_072, 262_144, 524_288, 1_048_576]
+
+function contextLengthLabel(tokens: number): string {
+  for (const [size, unit] of [[1_048_576, 'M'], [1_000_000, 'M'], [1024, 'K'], [1000, 'K']] as const) {
+    if (tokens % size === 0) return `${tokens / size}${unit}`
+  }
+  return tokens.toLocaleString('en-US')
+}
+
+function contextLengthOptions(window: ModelWindow | undefined, automatic: number | undefined) {
+  const limit = window?.detected ?? window?.maximum ?? Infinity
+  const sizes = new Set(contextPresets.filter(size => size <= limit))
+  if (window?.defaultContext && window.defaultContext <= limit) sizes.add(window.defaultContext)
+  if (automatic) sizes.add(automatic)
+  if (window?.override) sizes.add(window.override)
+  const options = [...sizes].sort((a, b) => a - b).map(size => {
+    const label = contextLengthLabel(size)
+    if (size === automatic && size === window?.defaultContext) return { value: String(size), label: `${label} (Default)` }
+    if (size === window?.override && window.effective && window.effective < size) {
+      return { value: String(size), label: `${label} (using ${contextLengthLabel(window.effective)})` }
+    }
+    return { value: String(size), label }
+  })
+  if (automatic === undefined) options.unshift({ value: 'auto', label: 'Auto' })
+  return options
+}
 
 function workerName(row: SubagentActivity): string {
   const name = row.model ? displayName(row.model) : ''
@@ -75,7 +102,8 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
     ? pickerMenu($, e, state.openMenu, menu, actions.setOpenMenu)
     : <Select key={menu.key} label={menu.label} value={menu.value} options={menu.options} onSelect={menu.onSelect} />
   const window = state.modelWindow?.model === model && state.modelWindow.endpoint === state.endpoint ? state.modelWindow : undefined
-  const contextValue = window?.effective ? String(window.effective) : ''
+  const automaticContext = window?.detected ?? window?.defaultContext ?? (window?.override === undefined ? window?.effective : undefined)
+  const contextValue = String(window?.override ?? automaticContext ?? 'auto')
   const target = state.selection?.current ?? (preferences.enabled && preferences.mode === 'full' ? preferences.model : '')
   const native = !target
   // A late response belongs to its captured target. Never present it as the
@@ -171,9 +199,12 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
             </Box>
           ) : null}
           {advanced ? <Box key="settings-details" flexDirection="column" rowGap={settingsGap}>
-            {model ? field('Context length', label => <Input key={`context-${state.endpoint}-${model}`} label={label} value={contextValue}
-              placeholder={isDesktop ? 'Context length' : undefined} submitLabel={isTerminal ? '' : 'Save'}
-              onSubmit={value => value.trim() === contextValue ? undefined : actions.setContext(value)} />) : null}
+            {model ? field('Context length', label => <Select key={`context-${state.endpoint}-${model}`} label={label} value={contextValue}
+              options={contextLengthOptions(window, automaticContext)}
+              onSelect={value => {
+                const setting = value === String(automaticContext) ? 'auto' : value
+                if (setting !== String(window?.override ?? 'auto')) return actions.setContext(setting)
+              }} />) : null}
             {field('Ollama address', label => <Box key="connection" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1}>
               <Input key="endpoint" label={label} value={state.endpoint} placeholder="http://localhost:11434" submitLabel={isTerminal ? '' : 'Save'} onSubmit={actions.setEndpoint} />
               {state.connected ? <Text key="connection-status" dimColor>Connected</Text>

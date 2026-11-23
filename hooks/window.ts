@@ -4,7 +4,7 @@ import type { ModelWindow } from '../types'
 import { getConnection, runningContext, showModel } from './ollama'
 import type { Connection } from './ollama'
 import { readCachedModels } from './discovery'
-import { getPreferences, updateView } from './runtime'
+import { getPreferences, readView, updateView } from './runtime'
 
 type Owner = { previous?: string; written?: string }
 const ownerState = atom({ plugin: 'ollama', key: 'windowOwner' } as const, {} as Owner, { shape: 'context-owner-v1' })
@@ -27,7 +27,17 @@ function overrideKey(connection: Connection, model: string): string {
   return `context-override-v1:${encodeURIComponent(JSON.stringify([connection.base, model]))}`
 }
 
-export async function readModelWindow($: EngineInterface, connection: Connection, model: string): Promise<ModelWindow> {
+async function readDesktopContext($: EngineInterface, connection: Connection): Promise<number | undefined> {
+  const url = new URL(connection.base)
+  if (url.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) return
+  const result = await $.process.run(['node', `${$.plugin.root}/scripts/desktop-context.mjs`, connection.base], { timeoutMs: 4000 })
+  const text = result.stdout.trim()
+  if (result.exitCode !== 0 || result.isStdoutTruncated || !/^\d+$/.test(text)) return
+  const size = Number(text)
+  return positive(size) ? size : undefined
+}
+
+export async function readModelWindow($: EngineInterface, connection: Connection, model: string, includeDesktopDefault = false): Promise<ModelWindow> {
   if (!model) return { model, endpoint: connection.base, source: 'unknown' }
   const [metadata, allocation, saved] = await Promise.all([
     showModel($, connection, model).catch(async () => (await readCachedModels($, connection)).find(item => item.name === model)),
@@ -35,10 +45,19 @@ export async function readModelWindow($: EngineInterface, connection: Connection
     $.store.get(overrideKey(connection, model)).catch(() => undefined),
   ])
   const maximum = positive(metadata?.maximumContext) ? metadata.maximumContext : metadata?.isCloud && positive(metadata.contextLength) ? metadata.contextLength : undefined
-  const detected = metadata?.isCloud ? maximum : positive(allocation) ? allocation : metadata?.parameterContext
+  const declared = metadata?.isCloud ? maximum : metadata?.parameterContext
+  const detected = !metadata?.isCloud && positive(allocation) ? allocation : declared
   const capacity = detected && maximum ? Math.min(detected, maximum) : detected
+  // The app preference identifies the default in the picker. An actual
+  // allocation or model parameter determines the local runtime capacity.
+  const inherited = declared ?? (includeDesktopDefault && metadata?.isCloud === false
+    ? await readDesktopContext($, connection).catch(() => undefined) : undefined)
+  const defaultContext = inherited && maximum ? Math.min(inherited, maximum) : inherited
   const override = positive(saved) && (!maximum || saved <= maximum) ? saved : undefined
-  const result: ModelWindow = { model, endpoint: connection.base, ...(maximum ? { maximum } : {}), ...(capacity ? { detected: capacity } : {}), source: 'unknown' }
+  const result: ModelWindow = {
+    model, endpoint: connection.base, source: 'unknown',
+    ...(maximum ? { maximum } : {}), ...(capacity ? { detected: capacity } : {}), ...(defaultContext ? { defaultContext } : {}),
+  }
   if (override) return { ...result, override, effective: capacity ? Math.min(override, capacity) : override, source: 'manual' }
   if (capacity) return { ...result, effective: capacity, source: metadata?.isCloud ? 'cloud' : positive(allocation) ? 'running' : 'parameters' }
   return result
@@ -128,12 +147,15 @@ export async function releaseWindow($: EngineInterface, run: object): Promise<vo
 export async function refreshConfiguredWindow($: EngineInterface): Promise<ModelWindow | undefined> {
   const version = ++revision
   const owner = await $.session.id()
-  const preferences = await getPreferences($)
-  const window = await readModelWindow($, await getConnection($), preferences.model)
+  const [preferences, connection, view] = await Promise.all([getPreferences($), getConnection($), readView($).catch(() => undefined)])
+  const window = await readModelWindow($, connection, preferences.model, view?.settingsOpen && view.openMenu?.key === 'advanced')
   if (version !== revision || owner !== await $.session.id()) return window
   configured = preferences.enabled ? window.effective : undefined
-  await sync($)
-  if (version === revision && owner === await $.session.id()) await updateView($, current => ({ ...current, modelWindow: window }))
+  try {
+    await updateView($, current => current.owner === owner && version === revision ? { ...current, modelWindow: window } : current)
+  } finally {
+    await sync($)
+  }
   return window
 }
 
