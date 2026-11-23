@@ -16,7 +16,7 @@ const initial: UIState = {
 const props = { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} }
 const expectedModes = [{ value: 'full', label: 'Full' }, { value: 'subagent', label: 'Subagents' }, { value: 'never', label: 'Off' }]
 
-function setup(on: On, initialState = initial) {
+function setup(on: On, initialState = initial, entrypoint?: string) {
   cancelSelection()
   let state = structuredClone(initialState)
   let sessionId = 'ui-test'
@@ -37,7 +37,7 @@ function setup(on: On, initialState = initial) {
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', () => ({ value: sessionId }))
-  on('env.get', () => ({ value: undefined }))
+  on('env.get', (_, e) => ({ value: e.name === 'CLAUDE_CODE_ENTRYPOINT' ? entrypoint : undefined }))
   on('config.list', () => ({ value: [{ key: 'ollama.modelCatalog', label: 'Model catalog', kind: 'text' as const, value: '[]', provider: { plugin: 'ollama', tier: 'user' as const }, isLocked: false }] }))
   on('state.get', async (_, e, next) => {
     const result = await next(e)
@@ -606,7 +606,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
 test('/ollama opens settings without changing saved preferences or toggling closed', async ($, on) => {
   const { writes, state } = setup(on)
   const result = await $.command.run({ command: 'ollama', args: '' } as Parameters<typeof $.command.run>[0])
-  expect(result.text).toBe('')
+  expect(result.text).toBeUndefined()
   expect(state().settingsOpen).toBe(true)
   await $.command.run({ command: 'ollama', args: '' } as Parameters<typeof $.command.run>[0])
   expect(state().settingsOpen).toBe(true)
@@ -899,12 +899,26 @@ test('/ollama model opens the shared picker without changing the mode', async ($
   const fixture = setup(on, { ...initial, preferences: { ...initial.preferences, enabled: false } })
   const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'model-command', props })
   const result = await $.command.run({ command: 'ollama', args: 'model' } as Parameters<typeof $.command.run>[0])
-  expect(result.text).toBe('')
+  expect(result.text).toBeUndefined()
   expect(fixture.state().settingsOpen).toBe(true)
   expect(await ui.find({ key: 'model-option-second' })).toBeDefined()
   await ui.press({ key: 'model-option-second' })
   expect(fixture.state().preferences).toEqual({ ...initial.preferences, model: 'second', enabled: false })
   await ui.unmount()
+})
+
+test('Desktop mode commands update the controls quietly and status still reports the mode', async ($, on) => {
+  const fixture = setup(on, initial, 'claude-desktop')
+  const run = (args: string) => $.command.run({
+    command: 'ollama', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 },
+  })
+  expect((await run('off')).text).toBeUndefined()
+  expect(fixture.state().preferences.enabled).toBe(false)
+  expect((await run('status')).text).toBe('Ollama off · Claude runs this chat and its subagents.')
+  expect((await run('model second')).text).toBeUndefined()
+  expect(fixture.state().preferences).toMatchObject({ enabled: false, model: 'second' })
+  expect((await run('full')).text).toBeUndefined()
+  expect(fixture.state().preferences.enabled).toBe(true)
 })
 
 test('Off keeps a failed switch visible without repeating the previous model', async ($, on) => {

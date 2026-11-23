@@ -213,7 +213,7 @@ export const register: Register = on => {
         const openMenu = command === 'model' ? { key: 'model' as const } : null
         await updateView($, current => ({ ...current, settingsOpen: true, openMenu }))
         if (openMenu) void refresh($, false, true).catch(() => undefined)
-        return { text: '', isTextDisplayOnly: true }
+        return {}
       }
       if (command === 'model') await persist($, { model: rest.join(' ') })
       else if (command === 'off' || command === 'never') await persist($, { enabled: false })
@@ -221,6 +221,9 @@ export const register: Register = on => {
         if (rest.length) throw new Error('Choose a model with /ollama model MODEL. Use /ollama full or /ollama subagent to switch modes.')
         await persist($, { mode: command, enabled: true })
       } else if (command !== 'status') return { text: 'Use /ollama model [MODEL], /ollama full, /ollama subagent, /ollama off, /ollama status, or /ollama uninstall.', isTextDisplayOnly: true }
+      if (command !== 'status' && await $.env.get('CLAUDE_CODE_ENTRYPOINT') === 'claude-desktop') {
+        return {}
+      }
       const preferences = await getPreferences($)
       if (command === 'model') return { text: `Ollama model · ${preferences.model}`, isTextDisplayOnly: true }
       if (!preferences.enabled) return { text: 'Ollama off · Claude runs this chat and its subagents.', isTextDisplayOnly: true }
