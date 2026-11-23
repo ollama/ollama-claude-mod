@@ -31,6 +31,8 @@ The mod applies your Ollama model and effort when it sends a request to Ollama. 
 | **Subagents** | Claude | Selected Ollama model |
 | **Off** | Claude | Claude |
 
+With `ollama launch claude`, the launcher controls the model and connection. The mod leaves that session’s prompts, requests, and interface to the launcher.
+
 New chats inherit your last saved model, mode, and effort. Resuming an existing chat restores its own setup. The model picker includes local models and available Ollama cloud models. Type to search.
 
 Settings shows the model and its supported effort options. Open **Advanced** for context length, the Ollama address, and request usage. Select the X to close settings and return to the compact status and worker activity. The compact mode button stays available after the first message. Errors remain visible when settings are closed. Workers show **Starting…** until their first response confirms the model.
