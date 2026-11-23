@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { EngineInterface, Hook, TurnUsage } from 'claude-code'
 import type { Preferences } from '../hooks/settings'
-import { executionComplete, executionFetch, executionSpawn, executionStep, recordWorkflowResponse } from '../hooks/execution'
+import { executionComplete, executionFetch, executionSpawn, executionStep, recordWorkerResponse } from '../hooks/execution'
 import { readView, updateView } from '../hooks/runtime'
 import { readActivity, resetActivity } from '../hooks/activity'
 
@@ -367,12 +367,13 @@ test('preferences are captured for the turn and a new native model is captured n
   expect(f.sent.map(request => JSON.parse(String(request.init?.body)).model)).toEqual(['ollama-model', 'ollama-model', 'different-model'])
 })
 
-test('workflow workers continue tool calls with their own recorded assistant blocks', async () => {
-  const f = fixture('subagent')
-  f.engine.session.messages = async () => { throw new Error('Workflow transcripts are unavailable') }
+test('ordinary and workflow workers continue from their own replies when the transcript is empty', async () => {
+  const f = fixture('subagent', true)
+  f.engine.session.messages = async () => []
   const workers = [`${f.id}-left`, `${f.id}-right`]
   await Promise.all(workers.map(async (agentId, index) => {
-    const spawn = { parentModel: 'claude-native', prompt: 'Read', description: 'Read', workflow: { runId: f.id, agentIndex: index + 1 } }
+    const workflow = index === 0 ? { runId: f.id, agentIndex: 1 } : undefined
+    const spawn = { parentModel: 'claude-native', prompt: 'Read', description: 'Read', workflow }
     await executionSpawn(f.engine, spawn as Parameters<Hook<'agent.spawn'>>[1],
       (async () => ({ agentId, model: 'claude-native' })) as unknown as Parameters<Hook<'agent.spawn'>>[2])
     await f.step(agentId, 'claude-native', async model => { await executionFetch(f.engine, f.request(model, agentId), f.transport) }, agentId)
@@ -381,7 +382,7 @@ test('workflow workers continue tool calls with their own recorded assistant blo
     let rowIndex = 0
     const append = async (content: Parameters<Append>[1]['message']['content']) => {
       const event = { agentId, door: 'response', uuid: `${agentId}-${++rowIndex}`, message: { type: 'assistant', role: 'assistant', content } } as Parameters<Append>[1]
-      await recordWorkflowResponse(f.engine, event, (async () => ({ uuid: event.uuid, message: event.message })) as unknown as Parameters<Append>[2])
+      await recordWorkerResponse(f.engine, event, (async () => ({ uuid: event.uuid, message: event.message })) as unknown as Parameters<Append>[2])
     }
     const continued = (model: string, messages: unknown[]) => {
       const request = f.request(model, agentId)
@@ -402,9 +403,40 @@ test('workflow workers continue tool calls with their own recorded assistant blo
     await append([{ ...call, id: `${agentId}-next` }])
     // A previous step's result must not satisfy this step's tool call.
     const stale = { ...result, content: result.content.slice(0, 1) }
-    await f.step(agentId, 'claude-native', async model => { expect((await continued(model, [stale])).deny).toContain('could not be matched') }, agentId, 2)
+    await f.step(agentId, 'claude-native', async model => {
+      const denied = await continued(model, [stale])
+      expect(denied.deny).toContain('could not be matched')
+      expect(denied.deny).toContain(workflow ? 'Rerun the workflow.' : 'Rerun this subagent.')
+      expect(denied.deny).not.toContain('/model')
+    }, agentId, 2)
   }))
   expect(f.sent).toHaveLength(4)
+  expect(f.logs.filter(entry => entry.to === 'transcript')).toHaveLength(2)
+  expect((await readView(f.engine)).notice).toBe('')
+})
+
+test('Subagents mode retires the old worker-history banner and preserves unrelated notices', async () => {
+  const f = fixture('subagent', true)
+  const old = 'Ollama deepseek-v4.1-flash:cloud · history: The previous assistant response is unavailable. Start a new conversation. Change model with /model or Ollama settings.'
+  await updateView(f.engine, view => ({ ...view, notice: old }))
+  expect((await readView(f.engine)).notice).toBe('')
+  await updateView(f.engine, view => ({ ...view, notice: 'Check the Ollama address.' }))
+  expect((await readView(f.engine)).notice).toBe('Check the Ollama address.')
+})
+
+test('a missing main reply stays visible and gives recovery advice for the conversation', async () => {
+  const f = fixture('full', true)
+  f.engine.session.messages = async () => []
+  await f.step(f.id, 'claude-native', async model => { await executionFetch(f.engine, f.request(model), f.transport) })
+  await f.step(f.id, 'claude-native', async model => {
+    const request = f.request(model)
+    const body = { model, thread: { type: 'continue' }, messages: [{ role: 'user', content: 'continue' }] }
+    const denied = await executionFetch(f.engine, { ...request, init: { ...request.init, body: JSON.stringify(body) } }, f.transport)
+    expect(denied.deny).toContain('Start a new conversation.')
+    expect(denied.deny).not.toContain('/model')
+  }, undefined, 1)
+  expect(f.sent).toHaveLength(1)
+  expect((await readView(f.engine)).notice).toContain('The previous assistant response is unavailable.')
 })
 
 test('thread continuation without a saved beginning stops before sending', async () => {

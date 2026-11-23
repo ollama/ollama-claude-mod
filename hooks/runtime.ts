@@ -53,8 +53,9 @@ export async function getPreferences($: EngineInterface): Promise<Preferences> {
 }
 
 function forSession(current: ViewState, owner: string): ViewState {
-  // A previous version could leave its automatic /model failure in the saved view.
-  if (current.notice === 'The model switch did not finish. Choose a model with /model or select the use setting again to retry.') {
+  // Retire obsolete notices saved by older versions of the status bar.
+  if (current.notice === 'The model switch did not finish. Choose a model with /model or select the use setting again to retry.' ||
+      (current.preferences?.mode === 'subagent' && current.notice?.endsWith(' · history: The previous assistant response is unavailable. Start a new conversation. Change model with /model or Ollama settings.'))) {
     current = { ...current, notice: '' }
   }
   if (current.owner === owner) return current

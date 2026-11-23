@@ -89,9 +89,9 @@ export function toolResultsMatch(reply: Message, added: Message[]): boolean {
   return calls.length === results.length && results.every(block => typeof block.tool_use_id === 'string' && pending.delete(block.tool_use_id))
 }
 
-// Workflow agents publish the assistant reply one row at a time. Pair its
+// Agents can publish the assistant reply one row at a time. Pair its
 // tool calls with this continuation before attaching it to the saved request.
-export function workflowContinuation(before: Body | undefined, rows: (Block[] | undefined)[], request: Body): Body | undefined {
+export function workerContinuation(before: Body | undefined, rows: (Block[] | undefined)[], request: Body): Body | undefined {
   const added = request.messages ?? []
   if (!before?.messages?.length || rows.includes(undefined) || added[0]?.role !== 'user' ||
       added.some(message => message.role !== 'user' && message.role !== 'system')) return undefined
