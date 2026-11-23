@@ -4,7 +4,7 @@ import { getPreferences, readView, updateView } from './runtime'
 import { getConnection, prepareRequest, OllamaConnectionError, OllamaRequestError } from './ollama'
 import { invalidateStaleConnection } from './discovery'
 import type { Connection } from './ollama'
-import { toOllamaBody, wholeRequest, withoutUnsignedThinking } from './route'
+import { toOllamaBody, wholeRequest, withoutUnsignedThinking, workflowContinuation } from './route'
 import { captureWindow, releaseWindow } from './window'
 import { isOllamaModel, rememberNativeModel, resolveNativeModel } from './models'
 import { cancelInferenceSelection } from './selection'
@@ -26,6 +26,7 @@ type Run = {
   captured: boolean
   accepted: boolean
   lastRequest?: Body
+  workflowReply?: Parameters<typeof workflowContinuation>[1]
   output?: number
   measuredOutput?: number
   duration?: number
@@ -187,11 +188,25 @@ export async function executionSpawn($: Parameters<Hook<'agent.spawn'>>[0], e: P
     throw error
   }
   if (started.agentId && run && !agents.has(started.agentId)) {
+    if (e.workflow && run.model) run.workflowReply = []
     agents.set(started.agentId, run)
     await startAgentActivity($, run.sessionId, { id: started.agentId, model: run.model || '', confirmed: false, task: (e.description || e.prompt).replace(/\s+/g, ' ').trim().slice(0, 160), tokens: 0, running: true })
   }
   else if (run) await releaseWindow($, run).catch(() => undefined)
   return started
+}
+
+export const recordWorkflowResponse: Hook<'session.append'> = async (_, e, next) => {
+  const run = e.agentId ? agents.get(e.agentId) : undefined
+  if (!run?.accepted || !run.workflowReply || e.message.role !== 'assistant') return next(e)
+
+  // Reserve the row's position before awaiting the host's final content.
+  const rows = run.workflowReply
+  const index = rows.length
+  rows.push(undefined)
+  const result = await next(e)
+  if (result.message?.role === 'assistant') rows[index] = result.message.content
+  return result
 }
 
 async function* observeFirstOutput(stream: ReturnType<Parameters<Hook<'turn.step'>>[2]>, start: () => void) {
@@ -408,7 +423,12 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
     return fail($, run, 'history', 'This conversation continuation is not supported. Start a new conversation.')
   }
   let whole: Body = { ...body, thread: undefined }
-  if (continued) {
+  if (continued && run.workflowReply) {
+    // session.messages({ agentId }) cannot read agents filed under a workflow.
+    const restored = workflowContinuation(run.lastRequest, run.workflowReply, body)
+    if (!restored) return fail($, run, 'history', 'The workflow agent’s previous reply could not be matched to this request. Rerun the workflow.')
+    whole = restored
+  } else if (continued) {
     let before = history.get(historyKey(run, loop))
     if (!before) {
       try { before = template(await $.store.get(templateKey(run, loop))) }
@@ -468,6 +488,7 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   // subsequent read failures or replay any output/tool effects.
   if (response.value?.ok) {
     run.accepted = true
+    if (run.workflowReply) run.workflowReply = []
     if (run.previousConnectionIssue && run.previousConnectionIssue === new OllamaConnectionError(run.connection.base).message) {
       const base = run.connection.base
       invalidateStaleConnection(base, true)

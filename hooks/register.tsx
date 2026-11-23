@@ -5,7 +5,7 @@ import { getConnection, saveConnection } from './ollama'
 import { loadModels, syncNativePicker } from './discovery'
 import { copyChatPreferences, getPreferences, notice, preferenceOwner, readView, rememberClear, updateView } from './runtime'
 import { modeLabels, renderUI } from './ui'
-import { executionComplete, executionFetch, executionSpawn, executionStep } from './execution'
+import { executionComplete, executionFetch, executionSpawn, executionStep, recordWorkflowResponse } from './execution'
 import { isCurrentMainSwitch, modelSwitched, preserveNativeStartup, refreshModelCatalog, rememberNativeModel } from './models'
 import { cancelSelection, confirmSelection, isOwnSelection, scheduleSelection, selectModel } from './selection'
 import { refreshConfiguredWindow, resetWindows, saveModelWindow } from './window'
@@ -243,6 +243,7 @@ export const register: Register = on => {
     return result
   })
   on('session.append', { door: 'hook-context' }, ($, e, next) => refreshQueuedRoutingContext($, e, next))
+  on('session.append', { door: 'response' }, recordWorkflowResponse)
 
   on('agent.spawn', ($, e, next) => executionSpawn($, e, next))
   on('turn.step', async function* ($, e, next) { return yield* executionStep($, e, next) })
