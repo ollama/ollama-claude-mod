@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { EngineInterface, Hook, TurnUsage } from 'claude-code'
-import type { Preferences } from '../hooks/settings'
+import { savePreference, type Preferences } from '../hooks/settings'
 import { executionComplete, executionFetch, executionSpawn, executionStep, recordWorkerResponse } from '../hooks/execution'
 import { readView, updateView } from '../hooks/runtime'
 import { readActivity, resetActivity } from '../hooks/activity'
@@ -955,6 +955,18 @@ test('returning from Full to a native model keeps prior Ollama history safe for 
   const body = JSON.parse(String(f.sent[1]?.init?.body))
   expect(body.model).toBe('claude-selected')
   expect(body.messages[1].content).toEqual([{ type: 'text', text: 'prior answer' }])
+})
+
+test('an Inkling worker keeps its model when Full routes new work to Kimi', async () => {
+  const f = fixture()
+  f.stored.delete(`preferences:${f.id}`)
+  const worker = `${f.id}-worker`
+  await executionSpawn(f.engine, { parentModel: 'claude-opus', prompt: 'task', description: 'task', subagentType: 'Explore' } as Parameters<Hook<'agent.spawn'>>[1],
+    (async () => ({ model: 'claude-haiku', agentId: worker })) as unknown as Parameters<Hook<'agent.spawn'>>[2])
+  await savePreference(f.engine, f.id, 'mode', 'full')
+  await f.step(`${worker}-turn`, 'claude-haiku', async model => { await executionFetch(f.engine, f.request(model, worker), f.transport) }, worker)
+  await f.step(f.id, 'claude-opus', async model => { await executionFetch(f.engine, f.request(model), f.transport) })
+  expect(f.sent.map(request => JSON.parse(String(request.init?.body)).model)).toEqual(['inkling-2-small:cloud', 'kimi-k3.1-pro:cloud'])
 })
 
 test('Full sends the main request and parallel native Haiku agents to the selected Ollama model', async () => {

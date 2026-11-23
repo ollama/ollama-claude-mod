@@ -29,16 +29,15 @@ export async function preferenceOwner($: EngineInterface, sessionId: string): Pr
   const hostId = await $.env.get('CLAUDE_CODE_HOST_SESSION_ID')
   if (!hostId || !/^local_[a-f0-9-]{36}$/.test(hostId)) return sessionId
   const owner = `desktop:${hostId}`
-  const previous = await loadPreferences($, sessionId)
-  await loadPreferences($, owner, previous)
+  await copyPreferences($, sessionId, owner)
   await $.store.set(key, owner)
   return owner
 }
 
 export async function copyChatPreferences($: EngineInterface, sourceId: string, targetId: string): Promise<Preferences> {
   const source = await preferenceOwner($, sourceId)
-  const target = await preferenceOwner($, targetId)
-  return copyPreferences($, source, target)
+  await copyPreferences($, source, targetId)
+  return loadPreferences($, await preferenceOwner($, targetId))
 }
 
 export async function getPreferences($: EngineInterface): Promise<Preferences> {
