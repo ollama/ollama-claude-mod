@@ -555,20 +555,24 @@ test('an accepted stream blocks same-step native retries but allows the next too
   const next = Object.assign(async (e: FetchInput) => { f.sent.push(e); return { value: { ...ok.value, isStreaming: true as const } } }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
   await f.step(f.id, 'claude-original', async model => {
     const request = f.request(model)
+    const suggestion = { ...request, init: { ...request.init, headers: { ...request.init?.headers, 'x-claude-1p-request-class': 'followup-generation' } } }
+    await executionFetch(f.engine, suggestion, next)
+    expect(f.sent[0]?.url).toBe('https://api.anthropic.com/v1/messages')
     await executionFetch(f.engine, request, next)
+    expect(f.sent[1]?.url).toBe('http://127.0.0.1:11434/v1/messages')
     const replay = await executionFetch(f.engine, request, next)
     expect('deny' in replay).toBe(true)
     const nativeReplay = await executionFetch(f.engine, f.request('claude-original'), next)
     expect('deny' in nativeReplay).toBe(true)
-    expect(f.sent.length).toBe(1)
+    expect(f.sent.length).toBe(2)
     const classifier = { ...request, init: { ...request.init, headers: { ...request.init?.headers, 'anthropic-beta': 'auto-mode-classifier-2026' } } }
     await executionFetch(f.engine, classifier, next)
-    expect(f.sent.length).toBe(2)
-    expect(f.sent[1]?.url).toBe('https://api.anthropic.com/v1/messages')
+    expect(f.sent.length).toBe(3)
+    expect(f.sent[2]?.url).toBe('https://api.anthropic.com/v1/messages')
   })
   await f.step(f.id, 'claude-original', async model => { await executionFetch(f.engine, f.request(model), next) }, undefined, 1)
-  expect(f.sent.length).toBe(3)
-  expect(f.sent[2]?.url).toBe('http://127.0.0.1:11434/v1/messages')
+  expect(f.sent.length).toBe(4)
+  expect(f.sent[3]?.url).toBe('http://127.0.0.1:11434/v1/messages')
 })
 
 
@@ -615,21 +619,40 @@ test('an explicit native worker model does not replace the owner or global nativ
   expect(f.stored.get('native-model-v1:last')).toBe('claude-main')
 })
 
-test('known auxiliary requests outside an active step restore the saved native model', async () => {
-  const f = fixture()
-  f.stored.set(`native-model-v1:${f.id}`, 'claude-saved')
-  for (const marker of ['auto-mode-classifier-2026', 'claude-code-side-query']) {
+test('native side requests can inherit the Ollama model after a completed turn', async () => {
+  const f = fixture('full', true)
+  await f.step(f.id, 'claude-saved', async model => { await executionFetch(f.engine, f.request(model), f.transport) })
+  await executionComplete(f.engine, { turnId: f.id, answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' },
+    (async () => ({})) as unknown as Parameters<Hook<'turn.complete'>>[2])
+
+  const markers: Record<string, string>[] = [
+    { 'anthropic-beta': 'auto-mode-classifier-2026' },
+    { 'anthropic-beta': 'claude-code-side-query' },
+    { 'X-Claude-Code-Request-Class': 'auxiliary' },
+    { 'x-claude-1p-request-class': 'followup-generation' },
+    { 'x-claude-1p-request-class': 'summary-extraction' },
+  ]
+  for (const marker of markers) {
     const request = f.request('full-model')
-    await executionFetch(f.engine, { ...request, init: { ...request.init, headers: { ...request.init?.headers, 'anthropic-beta': marker } } }, f.transport)
+    const result = await executionFetch(f.engine, { ...request, init: { ...request.init, headers: { ...request.init?.headers, ...marker } } }, f.transport)
+    expect(result.deny).toBeUndefined()
   }
-  expect(f.sent.length).toBe(2)
-  expect(f.sent.every(request => request.url === 'https://api.anthropic.com/v1/messages')).toBe(true)
-  expect(f.sent.every(request => JSON.parse(String(request.init?.body)).model === 'claude-saved')).toBe(true)
-  expect(f.sent[0]?.init?.headers?.authorization).toBe('native-secret')
-  const unknown = f.request('full-model')
-  const missing = await executionFetch(f.engine, unknown, f.transport)
-  expect(missing.deny?.includes('snapshot')).toBe(true)
-  expect(f.sent.length).toBe(2)
+  const sideRequests = f.sent.slice(1)
+  expect(sideRequests.length).toBe(markers.length)
+  for (const request of sideRequests) {
+    expect(request.url).toBe('https://api.anthropic.com/v1/messages')
+    expect(JSON.parse(String(request.init?.body)).model).toBe('claude-saved')
+    expect(request.init?.headers?.authorization).toBe('native-secret')
+  }
+  expect(f.logs.filter(log => log.to === 'transcript')).toEqual([])
+})
+
+test('an untracked Ollama request is denied without reporting a failed chat turn', async () => {
+  const f = fixture('full', true)
+  const result = await executionFetch(f.engine, f.request('full-model'), f.transport)
+  expect(result.deny).toBeDefined()
+  expect(f.sent.length).toBe(0)
+  expect(f.logs.filter(log => log.to === 'transcript')).toEqual([])
 })
 
 test('Off restores a known auxiliary Ollama selection to the native baseline', async () => {

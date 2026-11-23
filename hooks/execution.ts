@@ -42,7 +42,7 @@ const MAIN = 'main'
 const CHOOSE_NATIVE = 'Choose a Claude model with /model for native requests.'
 const INVALID_CONNECTION = 'Could not read the Ollama connection settings. Check the address in Settings → Advanced.'
 
-async function fail($: EngineInterface, run: Pick<Run, 'model' | 'failed' | 'failure'> & Partial<Run>, phase: string, reason: string, status?: number) {
+async function fail($: EngineInterface, run: Run, phase: string, reason: string, status?: number) {
   const firstFailure = !run.failed
   run.failed = true
   const detail = status === 429 ? 'Rate limit reached. Try again later or choose another model.'
@@ -60,13 +60,13 @@ async function fail($: EngineInterface, run: Pick<Run, 'model' | 'failed' | 'fai
   // user has since changed models or a newer turn owns the status bar.
   if (firstFailure) {
     try {
-      if (!run.sessionId || run.sessionId === await $.session.id()) {
+      if (run.sessionId === await $.session.id()) {
         const role = run.worker ? 'subagent' : 'request'
         $.ui.log(`Ollama ${role} failed (${model}${status ? `, HTTP ${status}` : ''}). ${detail}`, { to: 'transcript' })
       }
     } catch { /* Keep the original failure when the host cannot display a notice. */ }
   }
-  if (firstFailure && run.sessionId && run.noticeRevision !== undefined) {
+  if (firstFailure && run.noticeRevision !== undefined) {
     const owner = run.sessionId
     const role = run.worker ? 'subagent' : 'full'
     const effort = run.worker ? 'subagentEffort' : 'fullEffort'
@@ -348,7 +348,10 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   }
   if (changed) e = { ...e, init: { ...e.init, body: JSON.stringify(body) } }
   const beta = header(e.init?.headers, 'anthropic-beta')
-  const markedAuxiliary = beta.includes('auto-mode-classifier') || beta.includes('claude-code-side-query')
+  const requestClass = header(e.init?.headers, 'x-claude-code-request-class')
+  const firstPartyClass = header(e.init?.headers, 'x-claude-1p-request-class')
+  const markedAuxiliary = beta.includes('auto-mode-classifier') || beta.includes('claude-code-side-query') ||
+    requestClass === 'auxiliary' || firstPartyClass === 'followup-generation' || firstPartyClass === 'summary-extraction'
   // Native side requests can outlive the step, and may inherit an Ollama
   // picker selection even while Off. They always stay on the native client.
   if (markedAuxiliary) {
@@ -370,7 +373,10 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   const auxiliary = tools.length > 0 && tools.every(tool => tool.input_schema === undefined)
   if (!run) {
     if (knownConversation && !auxiliary && body.model && await isOllamaModel($, body.model)) {
-      return fail($, { model: body.model, failed: false }, 'routing', 'The active run snapshot is unavailable. Start a new turn.')
+      // With no step to own this request, do not report a failure against the chat.
+      const reason = 'Claude Code requested an Ollama model outside an active inference step.'
+      try { $.ui.log(reason, { to: 'debug' }) } catch { /* The request still has to be denied. */ }
+      return { deny: reason }
     }
     return next(e)
   }
