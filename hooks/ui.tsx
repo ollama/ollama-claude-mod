@@ -111,7 +111,8 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
     return <Box key={`${key}-control`} flexDirection="column" alignItems="stretch" flexShrink={0}>
       <Box height={0} flexShrink={0} flexDirection="row" justifyContent="flex-end" alignItems="flex-start"
         paddingRight={1} overflow="visible">
-        <Box paddingTop={1}>
+        {/* Half a text row centers the 14 px icon in Desktop's 28 px button. */}
+        <Box paddingTop={0.5}>
           <Svg source={chevronSvg(expanded ? 'up' : 'down')} alt={`${expanded ? 'Collapse' : 'Expand'} ${subject}`}
             width={chevronSize} height={chevronSize} />
         </Box>
