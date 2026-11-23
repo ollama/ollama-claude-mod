@@ -5,6 +5,7 @@ import { pickerMenu } from './menu'
 import type { Menu } from './menu'
 import { modelChoices, modelLabel } from './catalog'
 import { resolveNativeModel } from './models'
+import { desktopEffort } from './native-effort'
 
 export type UIState = ViewState & { activity?: ActivityState; isDark?: boolean; showResponseSpeed?: boolean }
 
@@ -130,7 +131,9 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
     ...(usage.outputTokens !== undefined ? [`${usage.outputTokens.toLocaleString('en-US')} output tokens`] : []),
   ].join(' · ')
   const visuals = activityElements($, e, state.isDark ?? false)
-  const mainEffort = main?.effort ?? (!native && target === model ? currentEffort : undefined)
+  const nativeEffort = isDesktop && preferences.enabled && native && modelId && modelId !== 'default' && !main?.running
+    ? await desktopEffort($, modelId, main?.effort).catch(() => undefined) : undefined
+  const mainEffort = nativeEffort ?? main?.effort ?? (!native && target === model ? currentEffort : undefined)
   const summaryEffort = mainEffort === 'on' || mainEffort === 'off'
     ? `Thinking ${mainEffort}` : mainEffort ? effortLabels[mainEffort] : undefined
   const bar = (
