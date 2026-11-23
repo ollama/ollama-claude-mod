@@ -1,7 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
-import type { Hook, On } from 'claude-code'
+import type { EngineInterface, Hook, On } from 'claude-code'
 import type { UIState } from '../hooks/ui'
 import { cancelSelection } from '../hooks/selection'
+import { desktopEffort } from '../hooks/native-effort'
 
 const initial: UIState = {
   preferences: { enabled: true, mode: 'full', model: 'first', fullEffort: 'high', subagentEffort: 'on' },
@@ -913,6 +914,59 @@ test('Off keeps a failed switch visible without repeating the previous model', a
   expect((await ui.find({ type: 'Text', text: 'Switch failed' }))?.text).toBe('Switch failed')
   expect(await ui.find({ key: 'retry-switch' })).toBeDefined()
   await ui.unmount()
+})
+
+test('switching to Subagents displays the native effort before the first request', async ($, on) => {
+  setup(on)
+  let effort = 'xhigh'
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('settings.read', (_, e) => ({ value: e.source === 'flag' ? { effortLevel: effort } : {} }))
+  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'native-effort', props })
+  expect(await ui.find({ type: 'Text', text: 'High' })).toBeDefined()
+  await ui.select({ key: 'compact-mode', value: 'subagent' })
+  expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Extra' })).toBeDefined()
+  effort = 'medium'
+  await ui.redraw(props)
+  expect(await ui.find({ type: 'Text', text: 'Medium' })).toBeDefined()
+  await ui.select({ key: 'compact-mode', value: 'never' })
+  expect(await ui.find({ type: 'Text', text: 'Medium' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('Desktop reads only the launch effort of the current chat and model', async () => {
+  const hostId = 'local_11111111-1111-4111-8111-111111111111'
+  const account = '22222222-2222-4222-8222-222222222222'
+  const org = '33333333-3333-4333-8333-333333333333'
+  const model = 'claude-opus-5-5'
+  const env: Record<string, string> = { CLAUDE_CODE_HOST_SESSION_ID: hostId, CLAUDE_CODE_ACCOUNT_UUID: account,
+    CLAUDE_CODE_ORGANIZATION_UUID: org, LOCALAPPDATA: 'C:/fixture' }
+  let header = JSON.stringify({ sessionId: hostId, nested: { effort: 'high' }, effort: 'xhigh', model, data: 'x'.repeat(10000) })
+  const reads: string[] = []
+  const host = {
+    env: { get: async (key: string) => env[key] },
+    settings: { read: async () => ({}) },
+    session: { info: async () => ({ platform: 'windows' }) },
+    fs: { read: async (path: string, options: { length: number }) => {
+      reads.push(path)
+      expect(options.length).toBe(8192)
+      return header.slice(0, options.length)
+    } },
+  } as unknown as EngineInterface
+  const read = (name: string) => desktopEffort(host, name)
+  expect(await read(model)).toBe('xhigh')
+  expect(reads).toEqual([`C:/fixture/Claude-Data/claude_pzs8sxrjxfjjc/claude-code-sessions/${account}/${org}/${hostId}.json`])
+  expect(await read('claude-sonnet-4-6')).toBeUndefined()
+  header = JSON.stringify({ model, effort: 'high', sessionId: hostId, data: 'x'.repeat(10000) })
+  expect(await read(model)).toBe('high')
+  header = JSON.stringify({ sessionId: hostId, model, nested: { effort: 'max' } })
+  expect(await read(model)).toBeUndefined()
+  header = JSON.stringify({ sessionId: 'another-chat', model, effort: 'high' })
+  expect(await read(model)).toBeUndefined()
+  env.CLAUDE_CODE_HOST_SESSION_ID = '../another-chat'
+  const before = reads.length
+  expect(await read(model)).toBeUndefined()
+  expect(reads).toHaveLength(before)
 })
 
 test('Subagents shows the native model behind a saved Ollama picker selection before a turn', async ($, on) => {
