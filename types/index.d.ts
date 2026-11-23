@@ -5,8 +5,7 @@ export type Mode = 'full' | 'subagent'
 export type Preferences = {
   enabled: boolean
   mode: Mode
-  full: string
-  subagent: string
+  model: string
   fullEffort?: Thinking
   subagentEffort?: Thinking
 }

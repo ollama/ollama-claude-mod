@@ -129,7 +129,7 @@ export async function refreshConfiguredWindow($: EngineInterface): Promise<Model
   const version = ++revision
   const owner = await $.session.id()
   const preferences = await getPreferences($)
-  const window = await readModelWindow($, await getConnection($), preferences[preferences.mode])
+  const window = await readModelWindow($, await getConnection($), preferences.model)
   if (version !== revision || owner !== await $.session.id()) return window
   configured = preferences.enabled ? window.effective : undefined
   await sync($)

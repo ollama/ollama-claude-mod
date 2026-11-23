@@ -68,16 +68,15 @@ async function fail($: EngineInterface, run: Run, phase: string, reason: string,
   }
   if (firstFailure && run.noticeRevision !== undefined) {
     const owner = run.sessionId
-    const role = run.worker ? 'subagent' : 'full'
     const effort = run.worker ? 'subagentEffort' : 'fullEffort'
     try {
       const preferences = await getPreferences($)
       if (owner === await $.session.id() && (noticeRevisions.get(owner) ?? 0) === run.noticeRevision &&
-          preferences.enabled && (run.worker || preferences.mode === 'full') && preferences[role] === run.model && preferences[effort] === run.effort) {
+          preferences.enabled && (run.worker || preferences.mode === 'full') && preferences.model === run.model && preferences[effort] === run.effort) {
         await updateView($, current => {
           if (current.owner !== owner || (noticeRevisions.get(owner) ?? 0) !== run.noticeRevision ||
               current.notice !== run.previousNotice || !current.preferences.enabled || (!run.worker && current.preferences.mode !== 'full') ||
-              current.preferences[role] !== run.model || current.preferences[effort] !== run.effort || current.selection?.status === 'pending') return current
+              current.preferences.model !== run.model || current.preferences[effort] !== run.effort || current.selection?.status === 'pending') return current
           if (phase === 'connection') {
             if (!run.connection) return { ...current, notice: detail }
             if (current.endpoint && current.endpoint !== run.connection.base) return current
@@ -152,7 +151,7 @@ async function snapshot($: EngineInterface, nativeModel: string, worker: boolean
   // another chat's history. Stop this step if the owner changed.
   if (sessionId !== await $.session.id()) throw new Error('Chat changed while capturing the run.')
   const enabled = preferences.enabled && (worker || preferences.mode === 'full')
-  const model = enabled ? preferences[worker ? 'subagent' : 'full'] : ''
+  const model = enabled ? preferences.model : ''
   const effort = worker ? preferences.subagentEffort : preferences.fullEffort
   const view = await readView($).catch(() => undefined)
   const run: Run = { sessionId, nativeModel, model, effort, failed: false, captured: false, accepted: false, worker, previousNotice: view?.notice,

@@ -9,11 +9,11 @@ const rows = [{ model: 'local-model', label: 'Ollama · Local Model', descriptio
 function config(catalog = rows): Settings {
   return { pluginConfigs: { 'ollama': { options: { modelCatalog: JSON.stringify(catalog) } } } }
 }
-function fixture(preferences: Preferences = { ...DEFAULT_PREFERENCES, full: 'local-model' }) {
+function fixture(preferences: Preferences = { ...DEFAULT_PREFERENCES, model: 'local-model' }) {
   let id = 'model-chat'
   let current = 'claude-opus-4-8'
   let user = config()
-  let state = { shape: 'view-v1', value: { models, notice: '' } }
+  let state = { shape: 'view-v2', value: { models, notice: '' } }
   const values = new Map<string, unknown>([['preferences:model-chat', { version: 1, value: preferences }]])
   const configs: unknown[] = []
   const engine = {
@@ -55,7 +55,7 @@ test('partial discovery retains model identity until a complete catalog replaces
 
 test('native picker selection enables Full; Claude preserves active Subagents and publishes it', async () => {
   const f = fixture()
-  expect(await apply(f, switched('claude-opus-4-8', 'local-model'))).toMatchObject({ enabled: true, mode: 'full', full: 'local-model' })
+  expect(await apply(f, switched('claude-opus-4-8', 'local-model'))).toMatchObject({ enabled: true, mode: 'full', model: 'local-model' })
   expect(await resolveNativeModel(f.engine, 'local-model')).toBe('claude-opus-4-8')
   await savePreference(f.engine, 'model-chat', 'mode', 'subagent')
   expect(await apply(f, switched('local-model', 'claude-sonnet-4-6'))).toMatchObject({ enabled: true, mode: 'subagent' })
@@ -70,10 +70,10 @@ test('worker resolution and startup of an older chat cannot replace the main fal
   expect(await resolveNativeModel(f.engine, 'claude-haiku-4-5')).toBe('claude-haiku-4-5')
   expect(await resolveNativeModel(f.engine, 'local-model')).toBe('claude-opus-4-8')
   f.move('older-chat')
-  await loadPreferences(f.engine, 'older-chat', { ...DEFAULT_PREFERENCES, full: 'local-model' })
+  await loadPreferences(f.engine, 'older-chat', { ...DEFAULT_PREFERENCES, model: 'local-model' })
   await rememberNativeModel(f.engine, 'claude-sonnet-4-6')
   f.move('new-chat')
-  await loadPreferences(f.engine, 'new-chat', { ...DEFAULT_PREFERENCES, full: 'local-model' })
+  await loadPreferences(f.engine, 'new-chat', { ...DEFAULT_PREFERENCES, model: 'local-model' })
   expect(await resolveNativeModel(f.engine, 'local-model')).toBe('claude-opus-4-8')
   expect(await isOllamaModel(f.engine, 'local-model')).toBe(true)
 })
@@ -83,16 +83,16 @@ test('a saved bare Ollama tag cannot become the Claude target when leaving full 
   f.values.set('model-catalog-v1', [{ ...rows[0], model: 'inkling-2-mini:latest' }])
   f.values.set('native-model-v1:model-chat', 'inkling-2-mini')
   f.values.set('native-model-v1:last', 'claude-opus-5-5')
-  expect(await resolveNativeModel(f.engine, DEFAULT_PREFERENCES.full)).toBe('claude-opus-5-5')
+  expect(await resolveNativeModel(f.engine, DEFAULT_PREFERENCES.model)).toBe('claude-opus-5-5')
   await rememberNativeModel(f.engine, 'inkling-2-mini', true)
   expect(f.values.get('native-model-v1:last')).toBe('claude-opus-5-5')
   f.values.set('native-model-v1:last', 'inkling-2-mini:latest')
-  expect(await resolveNativeModel(f.engine, DEFAULT_PREFERENCES.full)).toBe('default')
+  expect(await resolveNativeModel(f.engine, DEFAULT_PREFERENCES.model)).toBe('default')
   expect(await isOllamaModel(f.engine, 'inkling-2-mini:cloud')).toBe(false)
 })
 
 test('automatic and resume switches leave preference defaults unchanged', async () => {
-  const f = fixture({ ...DEFAULT_PREFERENCES, enabled: true, mode: 'subagent', subagent: 'local-model' })
+  const f = fixture({ ...DEFAULT_PREFERENCES, enabled: true, mode: 'subagent', model: 'local-model' })
   const before = await loadPreferences(f.engine, 'model-chat')
   expect(await apply(f, switched('claude-opus-4-8', 'local-model', 'auto'))).toBeUndefined()
   expect(await apply(f, switched('local-model', 'claude-sonnet-4-6', 'resume'))).toBeUndefined()
@@ -116,7 +116,7 @@ test('a delayed model switch cannot publish into a newly resumed chat', async ()
   const changing = apply(f, switched('claude-opus-4-8', 'local-model'))
   await reached
   f.move('resumed-chat')
-  const resumed = { ...DEFAULT_PREFERENCES, enabled: false, full: 'different-model' }
+  const resumed = { ...DEFAULT_PREFERENCES, enabled: false, model: 'different-model' }
   await loadPreferences(f.engine, 'resumed-chat', resumed)
   release()
   expect(await changing).toBeUndefined()

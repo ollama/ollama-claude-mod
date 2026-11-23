@@ -14,7 +14,7 @@ let sequence = 0
 function fixture(mode: Preferences['mode'] = 'full', reporting = false) {
   const id = `execution-${++sequence}`
   let sessionId = id
-  const preferences: Preferences = { enabled: true, mode, full: 'full-model', subagent: 'worker-model' }
+  const preferences: Preferences = { enabled: true, mode, model: 'ollama-model' }
   const stored = new Map<string, unknown>([[`preferences:${id}`, { version: 1, value: preferences }]])
   const states = new Map<string, { value: unknown; version: number }>()
   const logs: { text: string; to: string }[] = []
@@ -25,7 +25,7 @@ function fixture(mode: Preferences['mode'] = 'full', reporting = false) {
     env: { get: async () => undefined },
     settings: { read: async () => ({}) },
     state: {
-      get: async (ref: { key: string }) => states.get(ref.key) ?? { value: ref.key === 'view' ? { shape: 'view-v1', value: { preferences, models: [], connected: true, endpoint: '', settingsOpen: false, notice: '' } } : undefined, version: 0 },
+      get: async (ref: { key: string }) => states.get(ref.key) ?? { value: ref.key === 'view' ? { shape: 'view-v2', value: { preferences, models: [], connected: true, endpoint: '', settingsOpen: false, notice: '' } } : undefined, version: 0 },
       set: async (ref: { key: string }, value: unknown) => {
         if (!reporting) throw new Error('Optional UI unavailable')
         const version = (states.get(ref.key)?.version ?? 0) + 1
@@ -58,7 +58,7 @@ function fixture(mode: Preferences['mode'] = 'full', reporting = false) {
 
 test('Ollama totals combine completed main and subagent requests, include cached input, and exclude native fallback', async () => {
   const f = fixture('full', true)
-  const usage = { model: 'full-model', input_tokens: 100, cache_read_input_tokens: 50, cache_creation_input_tokens: 25, output_tokens: 9 }
+  const usage = { model: 'ollama-model', input_tokens: 100, cache_read_input_tokens: 50, cache_creation_input_tokens: 25, output_tokens: 9 }
   await f.step(f.id, 'claude-native', async model => { await executionFetch(f.engine, f.request(model), f.transport) }, undefined, 0, usage)
   await f.step(f.id, 'claude-native', async model => { await executionFetch(f.engine, f.request(model), f.transport) }, undefined, 1,
     { ...usage, input_tokens: 40, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
@@ -69,7 +69,7 @@ test('Ollama totals combine completed main and subagent requests, include cached
   await executionSpawn(f.engine, { parentModel: 'claude-native', prompt: 'Work', description: 'Work', subagentType: 'Explore' } as Parameters<Hook<'agent.spawn'>>[1],
     (async () => ({ agentId, model: 'claude-native' })) as unknown as Parameters<Hook<'agent.spawn'>>[2])
   await f.step(`${f.id}-child`, 'claude-native', async model => { await executionFetch(f.engine, f.request(model, agentId), f.transport) }, agentId, 0,
-    { ...usage, model: 'worker-model', input_tokens: 20, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 })
+    { ...usage, model: 'ollama-model', input_tokens: 20, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 })
   await f.step(`${f.id}-native`, 'claude-native', async model => { await executionFetch(f.engine, f.request(model), f.transport) }, undefined, 0, usage)
 
   f.preferences.mode = 'full'
@@ -100,7 +100,7 @@ test('a thinking-only Ollama response counts its reported output once in both to
   let now = 0
   const engine = { ...f.engine, clock: { ...f.engine.clock, now: async () => now } }
   const turnId = f.id
-  const usage: TurnUsage = { model: 'full-model', input_tokens: 42, output_tokens: 16, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  const usage: TurnUsage = { model: 'ollama-model', input_tokens: 42, output_tokens: 16, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
   const next = async function* (e: { model: string }) {
     await executionFetch(engine, f.request(e.model), f.transport)
     now = 10000
@@ -150,7 +150,7 @@ test('HTTP failures stop routed requests, retain Ollama selection, and never rep
       expect(retry).toEqual(result)
     })
     await f.step(f.id, 'claude-original', async model => {
-      expect(model).toBe('full-model')
+      expect(model).toBe('ollama-model')
       expect((await executionFetch(f.engine, f.request(model), next)).deny?.includes('/model')).toBe(true)
     }, undefined, 1)
     expect(f.sent.length).toBe(1)
@@ -190,7 +190,7 @@ test('Subagents keeps main native and a worker snapshot survives parent completi
   await executionSpawn(f.engine, { model: 'claude-worker', parentModel: 'claude-main', prompt: 'task', description: 'task', subagentType: 'Explore', tool_use_id: 'tool', provider: { plugin: 'engine', tier: 'core' } } as Parameters<Hook<'agent.spawn'>>[1], (async () => spawn) as unknown as Parameters<Hook<'agent.spawn'>>[2])
   f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, enabled: false } })
   await executionComplete(f.engine, { turnId: f.id } as Parameters<Hook<'turn.complete'>>[1], (async () => ({})) as unknown as Parameters<Hook<'turn.complete'>>[2])
-  await f.step(`${f.id}-child`, 'claude-worker', async model => { expect(model).toBe('worker-model') }, spawn.agentId)
+  await f.step(`${f.id}-child`, 'claude-worker', async model => { expect(model).toBe('ollama-model') }, spawn.agentId)
 })
 
 for (const mode of ['full', 'subagent'] as const) {
@@ -201,7 +201,7 @@ for (const mode of ['full', 'subagent'] as const) {
     const start = (async () => ({ agentId, model: 'claude-native' })) as unknown as Parameters<Hook<'agent.spawn'>>[2]
     await executionSpawn(f.engine, spawn, start)
     await f.step(`${f.id}-first`, 'claude-native', async model => {
-      expect(model).toBe('worker-model')
+      expect(model).toBe('ollama-model')
       await executionFetch(f.engine, f.request(model, agentId), f.transport)
     }, agentId)
     await executionComplete(f.engine, { agentId, turnId: `${f.id}-first`, answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' },
@@ -214,7 +214,7 @@ for (const mode of ['full', 'subagent'] as const) {
     }) as unknown as Parameters<Hook<'agent.spawn'>>[2])
     expect(resumed).toEqual(resume)
     await f.step(`${f.id}-resumed-turn`, 'claude-native', async model => {
-      expect(model).toBe('worker-model')
+      expect(model).toBe('ollama-model')
       await executionFetch(f.engine, f.request(model, agentId), f.transport)
     }, agentId)
     expect(f.sent[1]?.url).toBe('http://127.0.0.1:11434/v1/messages')
@@ -229,7 +229,7 @@ test('resuming an active worker retains its captured settings until completion',
   await executionSpawn(f.engine, spawn, start)
   f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, enabled: false } })
   await executionSpawn(f.engine, { ...spawn, resume: { agentId } }, start)
-  await f.step(`${f.id}-active-turn`, 'claude-native', async model => { expect(model).toBe('worker-model') }, agentId)
+  await f.step(`${f.id}-active-turn`, 'claude-native', async model => { expect(model).toBe('ollama-model') }, agentId)
   await executionComplete(f.engine, { agentId, turnId: `${f.id}-active-turn`, answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' },
     (async () => ({ text: 'done' })) as unknown as Parameters<Hook<'turn.complete'>>[2])
   await executionSpawn(f.engine, { ...spawn, resume: { agentId } }, start)
@@ -305,9 +305,9 @@ test('native web search omits empty domain lists and preserves real restrictions
 
 test('preferences are captured for the turn and a new native model is captured next turn', async () => {
   const f = fixture()
-  await f.step(f.id, 'claude-original', async model => { expect(model).toBe('full-model') })
-  f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, full: 'different-model' } })
-  await f.step(f.id, 'claude-original', async model => { expect(model).toBe('full-model') }, undefined, 1)
+  await f.step(f.id, 'claude-original', async model => { expect(model).toBe('ollama-model') })
+  f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, model: 'different-model' } })
+  await f.step(f.id, 'claude-original', async model => { expect(model).toBe('ollama-model') }, undefined, 1)
   const next = Object.assign(async (e: FetchInput) => {
     f.sent.push(e)
     return e.url.startsWith('https://api.anthropic.com') ? ok : { value: { ...ok.value, status: 503, ok: false } }
@@ -396,7 +396,7 @@ test('a prior chat background worker does not report into the newly selected cha
   expect(reportAttempts > 0).toBe(true)
   reportAttempts = 0
   f.setSessionId(`${f.id}-new-chat`)
-  await f.step(`${f.id}-worker`, 'claude-worker', async model => { expect(model).toBe('worker-model') }, agentId, 1)
+  await f.step(`${f.id}-worker`, 'claude-worker', async model => { expect(model).toBe('ollama-model') }, agentId, 1)
   expect(reportAttempts).toBe(0)
 })
 
@@ -608,9 +608,9 @@ test('an Ollama native picker selection is not replayed on its saved native base
     f.sent.push(e)
     return e.url.startsWith('https://api.anthropic.com') ? ok : { value: { ...ok.value, status: 503, ok: false } }
   }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
-  await f.step(f.id, 'full-model', async model => { await executionFetch(f.engine, f.request(model), next) })
+  await f.step(f.id, 'ollama-model', async model => { await executionFetch(f.engine, f.request(model), next) })
   expect(f.sent.length).toBe(1)
-  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('full-model')
+  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('ollama-model')
 })
 
 test('an explicit native worker model does not replace the owner or global native baseline', async () => {
@@ -625,7 +625,7 @@ test('an explicit native worker model does not replace the owner or global nativ
   }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
   await f.step(`${f.id}-worker`, 'claude-worker', async model => { await executionFetch(f.engine, f.request(model, agentId), next) }, agentId)
   expect(f.sent.length).toBe(1)
-  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('worker-model')
+  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('ollama-model')
   expect(f.stored.get(`native-model-v1:${f.id}`)).toBe('claude-main')
   expect(f.stored.get('native-model-v1:last')).toBe('claude-main')
 })
@@ -644,7 +644,7 @@ test('native side requests can inherit the Ollama model after a completed turn',
     { 'x-claude-1p-request-class': 'summary-extraction' },
   ]
   for (const marker of markers) {
-    const request = f.request('full-model')
+    const request = f.request('ollama-model')
     const result = await executionFetch(f.engine, { ...request, init: { ...request.init, headers: { ...request.init?.headers, ...marker } } }, f.transport)
     expect(result.deny).toBeUndefined()
   }
@@ -660,7 +660,7 @@ test('native side requests can inherit the Ollama model after a completed turn',
 
 test('an untracked Ollama request is denied without reporting a failed chat turn', async () => {
   const f = fixture('full', true)
-  const result = await executionFetch(f.engine, f.request('full-model'), f.transport)
+  const result = await executionFetch(f.engine, f.request('ollama-model'), f.transport)
   expect(result.deny).toBeDefined()
   expect(f.sent.length).toBe(0)
   expect(f.logs.filter(log => log.to === 'transcript')).toEqual([])
@@ -670,9 +670,9 @@ test('Off restores a known auxiliary Ollama selection to the native baseline', a
   const f = fixture()
   f.stored.set(`native-model-v1:${f.id}`, 'claude-saved')
   f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, enabled: false } })
-  await f.step(f.id, 'full-model', async model => {
+  await f.step(f.id, 'ollama-model', async model => {
     expect(model).toBe('claude-saved')
-    const request = f.request('full-model')
+    const request = f.request('ollama-model')
     await executionFetch(f.engine, { ...request, init: { ...request.init, headers: { ...request.init?.headers, 'anthropic-beta': 'auto-mode-classifier-2026' } } }, f.transport)
   })
   expect(f.sent.length).toBe(1)
@@ -684,14 +684,14 @@ test('Off restores a known auxiliary Ollama selection to the native baseline', a
 test('an unknown native baseline never sends the default alias in HTTP fallback', async () => {
   const f = fixture()
   const next = Object.assign(async (e: FetchInput) => { f.sent.push(e); return { value: { ...ok.value, status: 503, ok: false } } }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
-  await f.step(f.id, 'full-model', async model => {
+  await f.step(f.id, 'ollama-model', async model => {
     const result = await executionFetch(f.engine, f.request(model), next)
     expect(result.deny?.includes('/model') === true).toBe(true)
   })
   expect(f.sent.length).toBe(1)
   expect(f.sent[0]?.url).toBe('http://127.0.0.1:11434/v1/messages')
-  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('full-model')
-  const request = f.request('full-model')
+  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('ollama-model')
+  const request = f.request('ollama-model')
   const auxiliary = await executionFetch(f.engine, { ...request, init: { ...request.init, headers: { ...request.init?.headers, 'anthropic-beta': 'auto-mode-classifier-2026' } } }, next)
   expect(auxiliary.deny?.includes('/model') === true).toBe(true)
   expect(f.sent.length).toBe(1)
@@ -717,7 +717,7 @@ test('Subagents and Off keep native main and worker startup safe after an Ollama
     const f = fixture('subagent')
     f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, enabled } })
     f.stored.set('native-model-v1:last', 'claude-global')
-    await f.step(f.id, 'full-model', async model => {
+    await f.step(f.id, 'ollama-model', async model => {
       expect(model).toBe('claude-global')
       await executionFetch(f.engine, f.request(model), f.transport)
     })
@@ -725,17 +725,17 @@ test('Subagents and Off keep native main and worker startup safe after an Ollama
     expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('claude-global')
     const agentId = `${f.id}-worker`
     let startupModel = ''
-    await executionSpawn(f.engine, { parentModel: 'full-model', prompt: 'task', description: 'task', subagentType: 'Explore', tool_use_id: 'tool', provider: { plugin: 'engine', tier: 'core' } } as Parameters<Hook<'agent.spawn'>>[1], (async (e: Parameters<Hook<'agent.spawn'>>[1]) => {
+    await executionSpawn(f.engine, { parentModel: 'ollama-model', prompt: 'task', description: 'task', subagentType: 'Explore', tool_use_id: 'tool', provider: { plugin: 'engine', tier: 'core' } } as Parameters<Hook<'agent.spawn'>>[1], (async (e: Parameters<Hook<'agent.spawn'>>[1]) => {
       startupModel = e.model ?? e.parentModel
       return { model: startupModel, agentId }
     }) as Parameters<Hook<'agent.spawn'>>[2])
     expect(startupModel).toBe('claude-global')
     await f.step(`${f.id}-worker`, startupModel, async model => {
-      expect(model).toBe(enabled ? 'worker-model' : 'claude-global')
+      expect(model).toBe(enabled ? 'ollama-model' : 'claude-global')
       await executionFetch(f.engine, f.request(model, agentId), f.transport)
     }, agentId)
     expect(f.sent[1]?.url).toBe(enabled ? 'http://127.0.0.1:11434/v1/messages' : 'https://api.anthropic.com/v1/messages')
-    expect(JSON.parse(String(f.sent[1]?.init?.body)).model).toBe(enabled ? 'worker-model' : 'claude-global')
+    expect(JSON.parse(String(f.sent[1]?.init?.body)).model).toBe(enabled ? 'ollama-model' : 'claude-global')
   }
 })
 
@@ -756,11 +756,10 @@ test('returning from Full to a native model keeps prior Ollama history safe for 
   expect(body.messages[1].content).toEqual([{ type: 'text', text: 'prior answer' }])
 })
 
-test('Full sends the main request to Kimi and parallel native Haiku agents to DeepSeek', async () => {
+test('Full sends the main request and parallel native Haiku agents to the selected Ollama model', async () => {
   const f = fixture()
-  const main = 'kimi-k3.1-pro:cloud'
-  const worker = 'deepseek-v4.1-flash:cloud'
-  f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, full: main, subagent: worker } })
+  const selected = 'deepseek-v4.1-flash:cloud'
+  f.stored.set(`preferences:${f.id}:model`, { version: 1, value: selected })
   await f.step(f.id, 'claude-opus', async model => { await executionFetch(f.engine, f.request(model), f.transport) })
   const ids = [`${f.id}-haiku-a`, `${f.id}-haiku-b`]
   const spawned: string[] = []
@@ -771,12 +770,16 @@ test('Full sends the main request to Kimi and parallel native Haiku agents to De
     }) as Parameters<Hook<'agent.spawn'>>[2])
   }))
   expect(spawned).toEqual(['haiku', 'haiku'])
+  // Switching the model after launch affects new work only.
+  f.stored.set(`preferences:${f.id}:model`, { version: 1, value: 'kimi-k3.1-pro:cloud' })
   await Promise.all(ids.map(agentId => f.step(`${agentId}-turn`, 'claude-haiku-resolved', async model => {
-    expect(model).toBe(worker)
+    expect(model).toBe(selected)
     await executionFetch(f.engine, f.request(model, agentId), f.transport)
   }, agentId)))
   expect(f.sent.every(request => request.url === 'http://127.0.0.1:11434/v1/messages')).toBe(true)
-  expect(f.sent.map(request => JSON.parse(String(request.init?.body)).model)).toEqual([main, worker, worker])
+  expect(f.sent.map(request => JSON.parse(String(request.init?.body)).model)).toEqual([selected, selected, selected])
+  await f.step(`${f.id}-next`, 'claude-opus', async model => { await executionFetch(f.engine, f.request(model), f.transport) })
+  expect(JSON.parse(String(f.sent[3]?.init?.body)).model).toBe('kimi-k3.1-pro:cloud')
 })
 
 
@@ -806,7 +809,7 @@ test('parallel workers keep their model through tool-result and inline-system co
         { role: 'system', content: [{ type: 'text', text: `native reminder ${index}` }] },
       ]
       await f.step(`${agentId}-turn`, 'claude-worker', async model => {
-        expect(model).toBe('worker-model')
+        expect(model).toBe('ollama-model')
         const request = f.request(model, agentId)
         await executionFetch(f.engine, { ...request, init: { ...request.init, body: JSON.stringify({ model, thread: { type: 'continue' }, messages: delta }) } }, f.transport)
       }, agentId, index)
@@ -820,7 +823,7 @@ test('parallel workers keep their model through tool-result and inline-system co
   }))
   expect(f.sent.length).toBe(6)
   expect(f.sent.every(request => request.url === 'http://127.0.0.1:11434/v1/messages')).toBe(true)
-  expect(f.sent.every(request => JSON.parse(String(request.init?.body)).model === 'worker-model')).toBe(true)
+  expect(f.sent.every(request => JSON.parse(String(request.init?.body)).model === 'ollama-model')).toBe(true)
 })
 
 
@@ -851,12 +854,12 @@ test('Ollama failures log only model, phase, status and a safe reason through th
     const debug = f.logs.filter(log => log.to === 'debug')
     expect(debug).toHaveLength(1)
     const diagnostic = JSON.parse(debug[0]!.text.replace('Ollama failure: ', ''))
-    expect(diagnostic.model).toBe('full-model')
+    expect(diagnostic.model).toBe('ollama-model')
     expect(diagnostic.phase).toBe(phase === 'restriction' ? 'request' : phase === 'transport' ? 'connection' : phase)
     if (phase === 'preparation' || phase === 'response') expect(diagnostic.status).toBe(429)
     const visible = f.logs.filter(log => log.to === 'transcript')
     expect(visible).toHaveLength(1)
-    expect(visible[0]!.text).toContain('Ollama request failed (full-model')
+    expect(visible[0]!.text).toContain('Ollama request failed (ollama-model')
     expect(visible[0]!.text).toContain(diagnostic.reason)
     expect(f.logs.some(log => /secret|private.example|native-key|native-secret/.test(log.text))).toBe(false)
   }
@@ -881,7 +884,7 @@ test('a disconnected subagent stops at the saved address while the native main c
     (async () => ({})) as unknown as Parameters<Hook<'turn.complete'>>[2])
   const visible = f.logs.filter(log => log.to === 'transcript')
   expect(visible).toHaveLength(1)
-  expect(visible[0]!.text).toContain("Ollama subagent failed (worker-model). Can't reach Ollama at 127.0.0.1:49172")
+  expect(visible[0]!.text).toContain("Ollama subagent failed (ollama-model). Can't reach Ollama at 127.0.0.1:49172")
   await f.step(`${f.id}-main`, 'claude-native', async model => {
     expect(await executionFetch(f.engine, f.request(model), f.transport)).toBe(ok)
   })
@@ -934,7 +937,7 @@ test('a host denial is preserved and cannot trigger a native or Ollama retry', a
 
 
 test('unsupported threaded requests and malformed bodies never leak to native inference', async () => {
-  for (const body of ['{broken', JSON.stringify({ model: 'full-model', thread: { type: 'unknown' }, messages: [{ role: 'user', content: 'next' }] })]) {
+  for (const body of ['{broken', JSON.stringify({ model: 'ollama-model', thread: { type: 'unknown' }, messages: [{ role: 'user', content: 'next' }] })]) {
     const f = fixture()
     await f.step(f.id, 'claude-original', async model => {
       const request = f.request(model)
@@ -971,7 +974,7 @@ test('routed failures publish one safe model-specific notice while retaining the
       expect(caught).toBe(original)
       notice = (await readView(f.engine)).notice
     }
-    expect(notice.includes('full-model')).toBe(true)
+    expect(notice.includes('ollama-model')).toBe(true)
     expect(notice.includes(phase)).toBe(true)
     if (phase === 'response') expect(notice.includes('HTTP 404')).toBe(true)
     expect(notice.includes('/model')).toBe(true)
@@ -992,7 +995,7 @@ test('late failures cannot overwrite a new chat, newer turn, model choice or ret
     await ready
     if (changed === 'chat') f.setSessionId(`${f.id}-new`)
     if (changed === 'turn') await f.step(`${f.id}-new`, 'claude-native', async () => {})
-    if (changed === 'model') f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, full: 'different-model' } })
+    if (changed === 'model') f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, model: 'different-model' } })
     if (changed === 'notice') await updateView(f.engine, state => ({ ...state, notice: 'Retrying now' }))
     const before = (await readView(f.engine)).notice
     release()

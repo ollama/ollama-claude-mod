@@ -4,7 +4,7 @@ import type { Preferences } from '../types'
 import { composeRoutingContext, refreshQueuedRoutingContext, submitRoutingContext } from '../hooks/context'
 
 function fixture() {
-  let preferences: Preferences = { enabled: true, mode: 'full', full: 'configured-model', subagent: 'worker-model' }
+  let preferences: Preferences = { enabled: true, mode: 'full', model: 'configured-model' }
   let unreadable = false
   const engine = {
     session: { id: async () => 'context-chat' },
@@ -41,9 +41,8 @@ test('each submitted prompt carries configured routing while preserving text and
   const full = await submit(f.engine)
   expect(full.text).toBe(prompt.text)
   expect(full.context?.[0]).toBe('Other plugin context')
-  expect(full.context?.[1]).toContain('"configured-model" for this conversation')
-  expect(full.context?.[1]).toContain('"worker-model" for native subagents')
-  f.set({ enabled: false, mode: 'full', full: 'configured-model', subagent: 'worker-model' })
+  expect(full.context?.[1]).toContain('"configured-model" for this conversation and native subagents')
+  f.set({ enabled: false, mode: 'full', model: 'configured-model' })
   expect((await submit(f.engine)).context?.[1]).toBe('ollama routing: Off for new work; use native Claude Code models.')
   f.fail()
   expect((await submit(f.engine)).context?.[1]?.includes('Current settings could not be read')).toBe(true)
@@ -52,7 +51,7 @@ test('each submitted prompt carries configured routing while preserving text and
 test('queued context updates our routing note at append time and leaves unrelated text intact', async () => {
   const f = fixture()
   const submitted = await submit(f.engine)
-  f.set({ enabled: true, mode: 'subagent', full: 'configured-model', subagent: 'new-worker-model' })
+  f.set({ enabled: true, mode: 'subagent', model: 'new-worker-model' })
   const e = {
     door: 'hook-context', uuid: 'queued-context', origin: { kind: 'composer' },
     message: { type: 'attachment', content: [{ type: 'text', text: `Other plugin context\n${submitted.context![1]!.replace('ollama routing:', 'ollama-chat routing:')}` }, { type: 'text', text: 'Keep this second block' }] },
@@ -85,8 +84,8 @@ test('routing changes preserve the system prefix and previously submitted contex
   expect(original.sections.at(-1)?.scope).toBe('session')
 
   for (const preferences of [
-    { enabled: true, mode: 'subagent' as const, full: 'other-full', subagent: 'other-worker' },
-    { enabled: false, mode: 'full' as const, full: 'other-full', subagent: 'other-worker' },
+    { enabled: true, mode: 'subagent' as const, model: 'other-model' },
+    { enabled: false, mode: 'full' as const, model: 'other-model' },
   ]) {
     f.set(preferences)
     expect(await composeRoutingContext(f.engine, event, next)).toEqual(original)

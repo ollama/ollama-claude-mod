@@ -41,7 +41,7 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
   const els = $.ui.resolve(e)
   const { Box, Button, Input, Select, Text } = els
   const { preferences, showResponseSpeed = false } = state
-  const model = preferences[preferences.mode]
+  const model = preferences.model
   const effort = preferences.mode === 'full' ? preferences.fullEffort : preferences.subagentEffort
   const models = state.settingsOpen ? modelChoices(state.models, model) : []
   const selected = (state.settingsOpen ? models : state.models).find(one => one.name === model)
@@ -76,7 +76,7 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
     : <Select key={menu.key} label={menu.label} value={menu.value} options={menu.options} onSelect={menu.onSelect} />
   const window = state.modelWindow?.model === model && state.modelWindow.endpoint === state.endpoint ? state.modelWindow : undefined
   const contextValue = window?.effective ? String(window.effective) : ''
-  const target = state.selection?.current ?? (preferences.enabled && preferences.mode === 'full' ? preferences.full : '')
+  const target = state.selection?.current ?? (preferences.enabled && preferences.mode === 'full' ? preferences.model : '')
   const native = !target
   // A late response belongs to its captured target. Never present it as the
   // newly selected model (especially after switching back to Claude).

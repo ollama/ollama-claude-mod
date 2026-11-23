@@ -5,11 +5,12 @@ export type { Mode, Preferences } from '../types'
 export const DEFAULT_PREFERENCES: Preferences = Object.freeze({
   enabled: true,
   mode: 'subagent',
-  full: 'kimi-k3.1-pro:cloud',
-  subagent: 'deepseek-v4.1-flash:cloud',
+  model: 'deepseek-v4.1-flash:cloud',
 })
 
-const fields = ['enabled', 'mode', 'full', 'subagent', 'fullEffort', 'subagentEffort'] as const
+type StoredPreferences = Preferences & { full?: string; subagent?: string }
+const fields = ['enabled', 'mode', 'model', 'fullEffort', 'subagentEffort'] as const
+const storedFields = [...fields, 'full', 'subagent'] as const
 const thinking: readonly Thinking[] = ['off', 'on', 'low', 'medium', 'high', 'xhigh', 'max']
 const pending = new Map<string, Promise<void>>()
 const DEFAULTS_KEY = 'preference-defaults-v1'
@@ -37,28 +38,26 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function validField(field: keyof Preferences, value: unknown): boolean {
+function validField(field: keyof StoredPreferences, value: unknown): boolean {
   if (field === 'enabled') return typeof value === 'boolean'
   if (field === 'mode') return value === 'full' || value === 'subagent'
-  if (field === 'full' || field === 'subagent') return typeof value === 'string'
+  if (field === 'model' || field === 'full' || field === 'subagent') return typeof value === 'string'
   return value === undefined || thinking.includes(value as Thinking)
 }
 
-function preferences(value: unknown): Preferences {
-  const record: Record<string, unknown> | undefined = object(value) ? { full: '', subagent: '', ...value } : undefined
-  if (!record || Object.keys(record).some(field => !fields.includes(field as keyof Preferences)) ||
-      fields.some(field => !validField(field, record[field]))) {
+function storedPreferences(value: unknown): StoredPreferences {
+  const record: Record<string, unknown> | undefined = object(value) ? { model: '', ...value } : undefined
+  if (!record || !validField('enabled', record.enabled) || !validField('mode', record.mode) ||
+      Object.keys(record).some(field => !storedFields.includes(field as keyof StoredPreferences) || !validField(field as keyof StoredPreferences, record[field]))) {
     throw new Error('Chat preferences are malformed; the saved values were left unchanged.')
   }
-  return record as Preferences
+  return record as StoredPreferences
 }
 
-function blankModel(field: keyof Preferences, value: unknown): boolean {
-  return (field === 'full' || field === 'subagent') && typeof value === 'string' && !value.trim()
-}
-
-function fillModels(saved: Preferences, defaults: Preferences): Preferences {
-  return { ...saved, full: saved.full.trim() || defaults.full, subagent: saved.subagent.trim() || defaults.subagent }
+function withSharedModel({ full, subagent, ...saved }: StoredPreferences, fallback = ''): Preferences {
+  // Earlier versions showed the model for the last selected mode, even when Off.
+  const previousChoice = saved.mode === 'full' ? full : subagent
+  return { ...saved, model: saved.model.trim() || previousChoice?.trim() || full?.trim() || subagent?.trim() || fallback }
 }
 
 function envelope(value: unknown): Record<string, unknown> {
@@ -73,8 +72,9 @@ function envelope(value: unknown): Record<string, unknown> {
 async function readStored($: EngineInterface, sessionId: string): Promise<Preferences | undefined> {
   const base = key(sessionId)
   const saved = await $.store.get(base)
-  const result = saved === undefined ? undefined : preferences(envelope(saved).value)
-  for (const field of fields) {
+  const result = saved === undefined ? undefined : storedPreferences(envelope(saved).value)
+  const needsMigration = result && !result.model.trim()
+  for (const field of !result || needsMigration ? storedFields : fields) {
     const savedField = await $.store.get(`${base}:${field}`)
     if (savedField === undefined) continue
     const value = envelope(savedField).value
@@ -82,21 +82,23 @@ async function readStored($: EngineInterface, sessionId: string): Promise<Prefer
     if (!result || !validField(field, decoded)) {
       throw new Error('Chat preferences are malformed; the saved values were left unchanged.')
     }
-    if (!blankModel(field, decoded)) Object.assign(result, { [field]: decoded })
+    if (typeof decoded !== 'string' || decoded.trim()) Object.assign(result, { [field]: decoded })
   }
-  if (result && (!result.full.trim() || !result.subagent.trim())) {
-    // Freeze the missing role for this chat. Explicit per-field edits still win.
-    const repaired = fillModels(result, await readDefaults($))
-    await $.store.set(base, { version: 1, value: repaired })
-    return repaired
+  if (!result) return undefined
+  const preferences = withSharedModel(result)
+  if (needsMigration) {
+    if (!preferences.model) preferences.model = (await readDefaults($)).model
+    // Freeze the old pick before a mode change. A concurrent :model edit
+    // still wins because field records take precedence over this base record.
+    await $.store.set(base, { version: 1, value: preferences })
   }
-  return result
+  return preferences
 }
 
 async function readDefaults($: EngineInterface): Promise<Preferences> {
   try {
     const saved = await $.store.get(DEFAULTS_KEY)
-    return saved === undefined ? { ...DEFAULT_PREFERENCES } : fillModels(preferences(envelope(saved).value), DEFAULT_PREFERENCES)
+    return saved === undefined ? { ...DEFAULT_PREFERENCES } : withSharedModel(storedPreferences(envelope(saved).value), DEFAULT_PREFERENCES.model)
   } catch {
     throw new Error('Could not read saved defaults for new chats. The saved values were left unchanged.')
   }
@@ -107,7 +109,7 @@ export async function loadPreferences($: EngineInterface, sessionId: string, def
   try {
     const saved = await readStored($, sessionId)
     if (saved) return saved
-    const initial = defaults === undefined ? await readDefaults($) : fillModels(preferences(defaults), DEFAULT_PREFERENCES)
+    const initial = defaults === undefined ? await readDefaults($) : withSharedModel(storedPreferences(defaults), DEFAULT_PREFERENCES.model)
     await $.store.set(key(sessionId), { version: 1, value: initial })
     return { ...initial }
   } finally {
@@ -125,7 +127,7 @@ export async function savePreferences($: EngineInterface, sessionId: string, pat
   }
   // Capture and validate the complete edit before waiting or writing anything.
   const edits = fields.filter(field => Object.hasOwn(patch, field)).map(field => ({ field, value: patch[field] }))
-  if (edits.some(({ field, value }) => !validField(field, value) || blankModel(field, value))) throw new Error('Invalid chat preference changes.')
+  if (edits.some(({ field, value }) => !validField(field, value) || field === 'model' && typeof value === 'string' && !value.trim())) throw new Error('Invalid chat preference changes.')
   const chatKey = key(sessionId)
   const releaseDefaults = await lock('defaults')
   const releaseChat = await lock(`chat:${chatKey}`)
