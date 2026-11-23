@@ -93,18 +93,18 @@ export function toOllamaBody(body: Body, model: string, thinking?: Thinking): st
   return JSON.stringify({ ...body, model, tools, system, ...switched })
 }
 
-// Ollama's thinking blocks carry no signature, and the Anthropic API rejects
-// an unsigned thinking block. Undefined when nothing needs to change.
+// Claude rejects unsigned thinking and empty assistant turns in the history.
+// Return undefined when the original request can pass through unchanged.
 export function withoutUnsignedThinking(body: Body): string | undefined {
   let isChanged = false
-  const messages = body.messages?.map(message => {
+  const messages = body.messages?.flatMap(message => {
     if (message.role !== 'assistant' || typeof message.content === 'string') {
-      return message
+      return [message]
     }
     const content = message.content.filter(block => !(block.type === 'thinking' && !block.signature))
-    isChanged ||= content.length !== message.content.length
-
-    return { ...message, content }
+    if (content.length === message.content.length) return [message]
+    isChanged = true
+    return content.length ? [{ ...message, content }] : []
   })
 
   return isChanged ? JSON.stringify({ ...body, messages }) : undefined

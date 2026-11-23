@@ -362,8 +362,9 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
         if (nativeModel === 'default') return { deny: CHOOSE_NATIVE }
         return next({ ...e, init: { ...e.init, body: nativeBody(body, nativeModel) } })
       }
-    } catch { /* Classification failures leave the native request unchanged. */ }
-    return next(e)
+    } catch { /* Keep the requested model if classification is unavailable. */ }
+    const cleaned = withoutUnsignedThinking(body)
+    return next(cleaned ? { ...e, init: { ...e.init, body: cleaned } } : e)
   }
   const tools = body.tools ?? []
   const continued = body.thread?.type !== undefined && body.thread.type !== 'create'

@@ -262,14 +262,24 @@ test('a conversation with a different model stops before either provider receive
   expect(f.sent).toEqual([])
 })
 
-test('classifier and internal helper requests remain native', async () => {
+test('classifier requests stay native and omit thinking-only Ollama replies', async () => {
   const f = fixture()
+  const followUp = { role: 'user', content: 'try again' }
   await f.step(f.id, 'claude-original', async model => {
-    const request = f.request(model)
-    await executionFetch(f.engine, { ...request, init: { ...request.init, headers: { ...request.init?.headers, 'anthropic-beta': 'auto-mode-classifier-2026' } } }, f.transport)
+    for (const requested of [model, 'claude-classifier']) {
+      const request = f.request(requested)
+      const body = JSON.parse(String(request.init?.body))
+      body.messages.push({ role: 'assistant', content: [{ type: 'thinking', thinking: 'unfinished' }] }, followUp)
+      const headers = { ...request.init?.headers, 'anthropic-beta': 'auto-mode-classifier-2026' }
+      await executionFetch(f.engine, { ...request, init: { ...request.init, headers, body: JSON.stringify(body) } }, f.transport)
+    }
   })
-  expect(f.sent[0]?.url).toBe('https://api.anthropic.com/v1/messages')
-  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('claude-original')
+  const bodies = f.sent.map(request => JSON.parse(String(request.init?.body)))
+  expect(bodies.map(body => body.model)).toEqual(['claude-original', 'claude-classifier'])
+  for (const [index, request] of f.sent.entries()) {
+    expect(request.url).toBe('https://api.anthropic.com/v1/messages')
+    expect(bodies[index].messages).toEqual([{ role: 'user', content: 'hello' }, followUp])
+  }
 })
 
 test('native web search omits empty domain lists and preserves real restrictions', async () => {
@@ -332,17 +342,18 @@ test('continued requests include the prior prompt and native assistant tool repl
   expect(JSON.parse(String(f.sent[1]?.init?.body)).messages.length).toBe(3)
 })
 
-test('switching off cleans unsigned Ollama thinking in the native conversation', async () => {
+test('switching off drops thinking-only Ollama replies from the native conversation', async () => {
   const f = fixture()
+  const followUp = { role: 'user', content: 'continue' }
   f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, enabled: false } })
   await f.step(f.id, 'claude-original', async model => {
     const request = f.request(model)
     const body = JSON.parse(String(request.init?.body))
-    body.messages.push({ role: 'assistant', content: [{ type: 'thinking', thinking: 'private' }, { type: 'text', text: 'answer' }] })
+    body.messages.push({ role: 'assistant', content: [{ type: 'thinking', thinking: 'unfinished' }] }, followUp)
     await executionFetch(f.engine, { ...request, init: { ...request.init, body: JSON.stringify(body) } }, f.transport)
   })
   expect(f.sent[0]?.url).toBe('https://api.anthropic.com/v1/messages')
-  expect(JSON.parse(String(f.sent[0]?.init?.body)).messages[1].content).toEqual([{ type: 'text', text: 'answer' }])
+  expect(JSON.parse(String(f.sent[0]?.init?.body)).messages).toEqual([{ role: 'user', content: 'hello' }, followUp])
 })
 
 test('failed continuation is sent once to Ollama with the whole conversation', async () => {
