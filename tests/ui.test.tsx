@@ -191,10 +191,12 @@ test('desktop settings align field labels and stack them when space is limited',
   expect(collapsed).toMatchObject({ width: 14, height: 14 })
   expect(collapsed?.source).toContain('M3 4.5 6 7.5 9 4.5')
   const control = await ui.find({ key: 'advanced-control' })
-  expect(control?.children[0]).toMatchObject({ props: { width: 13, paddingTop: 0.25 }, children: [{ type: 'Svg' }] })
-  expect(control?.children[1]).toMatchObject({
-    props: { width: 13, marginLeft: -13, flexDirection: 'column', alignItems: 'stretch' },
-    children: [{ type: 'Button', props: { key: 'advanced' } }],
+  expect(control).toMatchObject({
+    props: { flexDirection: 'column', alignItems: 'stretch' },
+    children: [
+      { type: 'Box', props: { height: 0, justifyContent: 'flex-end' } },
+      { type: 'Box', children: [{ type: 'Button', props: { key: 'advanced' } }] },
+    ],
   })
   await ui.press({ key: 'advanced' })
   expect((await chevron('Collapse advanced settings'))?.source).toContain('M3 7.5 6 4.5 9 7.5')
@@ -862,12 +864,22 @@ for (const surface of ['desktop', 'terminal'] as const) {
     }
     await expectChevron(false)
     if (surface === 'desktop') {
-      const control = await ui.find({ key: 'subagents-toggle-control' })
-      expect(control?.children[0]).toMatchObject({ props: { width: 17 }, children: [{ type: 'Svg' }] })
-      expect(control?.children[1]).toMatchObject({
-        props: { width: 17, marginLeft: -17, alignItems: 'stretch' },
-        children: [{ type: 'Button', props: { key: 'subagents-toggle' } }],
-      })
+      const activity = fixture.state().activity!
+      const allWorkers = activity.subagents
+      for (const count of [1, 5, allWorkers.length]) {
+        activity.subagents = allWorkers.slice(0, count)
+        await ui.redraw(props)
+        const control = await ui.find({ key: 'subagents-toggle-control' })
+        const label = `${count} ${count === 1 ? 'subagent' : 'subagents'}\u2003`
+        expect(control?.props.width).toBeUndefined()
+        expect(control).toMatchObject({
+          props: { flexDirection: 'column', alignItems: 'stretch' },
+          children: [
+            { type: 'Box', props: { height: 0, justifyContent: 'flex-end' } },
+            { type: 'Box', children: [{ type: 'Button', props: { key: 'subagents-toggle', label } }] },
+          ],
+        })
+      }
     }
     expect(await ui.find({ key: 'subagent-11' })).toBeUndefined()
     await ui.press({ key: 'subagents-toggle' })
