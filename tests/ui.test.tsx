@@ -447,7 +447,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     let ui = await mount()
     expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
     await $.prompt.submit({ text: 'Hello', wait: false, origin: { kind: surface === 'desktop' ? 'sdk' : 'composer' } })
-    expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
+    expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe(surface === 'desktop' ? '' : 'Full ▾')
     expect(await ui.find({ key: 'settings' })).toBeDefined()
     await ui.press({ key: 'settings' })
     expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
@@ -479,58 +479,39 @@ for (const surface of ['desktop', 'terminal'] as const) {
   })
 }
 
-test('rejected and background prompts leave the mode summary visible', async ($, on) => {
+test('only an accepted user prompt dismisses an open terminal mode menu', async ($, on) => {
   const fixture = setup(on)
-  fixture.http( () => ({ value: { status: 503, ok: false, headers: {}, text: '' } }))
   on('prompt.submit', (_, e) => e.text === 'Rejected' ? { drop: 'Not accepted' } : { text: e.text })
-  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'summary-rejected', props })
+  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'terminal', component: 'AbovePrompt', requestId: 'mode-menu-submit', props })
+  await ui.press({ key: 'compact-mode' })
   await $.prompt.submit({ text: 'Rejected', wait: false, origin: { kind: 'composer' } })
-  expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
+  expect(await ui.find({ key: 'compact-mode-option-full' })).toBeDefined()
   await $.prompt.submit({ text: 'Background notification', wait: false, origin: { kind: 'task-notification' } })
-  expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
+  expect(await ui.find({ key: 'compact-mode-option-full' })).toBeDefined()
   await $.prompt.submit({ text: 'Accepted', wait: false, origin: { kind: 'composer' } })
-  expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
+  expect(await ui.find({ key: 'compact-mode-option-full' })).toBeUndefined()
+  expect(fixture.writes).not.toContain('settings-summary-v1:ui-test')
   await ui.unmount()
 })
 
-test('a native model picker change brings the mode summary back', async ($, on) => {
-  const fixture = setup(on)
-  fixture.http( () => ({ value: { status: 503, ok: false, headers: {}, text: '' } }))
-  on('prompt.submit', (_, e) => ({ text: e.text }))
-  on('classic.PostModelSwitch', () => ({}))
-  on('session.model', () => ({ value: 'second' }))
-  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'summary-model', props })
-  await $.prompt.submit({ text: 'Hello', wait: false, origin: { kind: 'composer' } })
-  expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
-  await $.classic.PostModelSwitch({
-    session_id: 'ui-test', from_model: 'first', to_model: 'second', requested_model: 'second', source: 'picker',
-  } as Parameters<typeof $.classic.PostModelSwitch>[0])
-  expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
-  expect(fixture.processes.some(process => process.argv.includes('startup'))).toBe(false)
-  await ui.unmount()
-})
-
-test('a setting changed while a prompt is pending stays visible when that prompt is accepted', async ($, on) => {
-  const fixture = setup(on)
-  fixture.http( () => ({ value: { status: 503, ok: false, headers: {}, text: '' } }))
+test('a terminal mode menu opened while a prompt is pending stays open', async ($, on) => {
+  setup(on)
   let entered!: () => void
   let accept!: () => void
   const waiting = new Promise<void>(resolve => { entered = resolve })
   const accepted = new Promise<void>(resolve => { accept = resolve })
   on('prompt.submit', async (_, e) => { entered(); await accepted; return { text: e.text } })
-  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'summary-pending', props })
+  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'terminal', component: 'AbovePrompt', requestId: 'mode-menu-pending', props })
   const submission = $.prompt.submit({ text: 'Hello', wait: false, origin: { kind: 'composer' } })
   await waiting
-  await ui.press({ key: 'settings' })
-  await ui.select({ key: 'compact-mode', value: 'never' })
-  await ui.press({ key: 'settings' })
+  await ui.press({ key: 'compact-mode' })
   accept()
   await submission
-  expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
+  expect(await ui.find({ key: 'compact-mode-option-full' })).toBeDefined()
   await ui.unmount()
 })
 
-test('terminal menus are clickable, exclusive, close on selection, and preserve per-mode choices', async ($, on) => {
+test('terminal menus close on selection and keep the shared model when switching modes', async ($, on) => {
   const { values, writes } = setup(on)
   const ui = await $.ui.mount({ plugin: 'ollama', surface: 'terminal', component: 'AbovePrompt', requestId: 'menus', props })
   await ui.press({ key: 'settings' })
@@ -1151,22 +1132,6 @@ for (const surface of ['desktop', 'terminal'] as const) {
 }
 
 for (const surface of ['desktop', 'terminal'] as const) {
-  test(`${surface}: used chats retain a compact mode action without the introductory label`, async ($, on) => {
-    setup(on)
-    on('prompt.submit', (_, e) => ({ text: e.text }))
-    const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: `quick-mode-${surface}`, props })
-    await $.prompt.submit({ text: 'Hello', wait: false, origin: { kind: 'composer' } })
-    if (surface === 'desktop') {
-      expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe('')
-      await ui.select({ key: 'compact-mode', value: 'never' })
-    } else {
-      expect((await ui.find({ key: 'compact-mode' }))?.props.label).toBe('Full ▾')
-      await ui.press({ key: 'compact-mode' })
-      await ui.press({ key: 'compact-mode-option-never' })
-    }
-    await ui.unmount()
-  })
-
   test(`${surface}: unconfirmed workers show Starting while confirmed native workers retain their identity`, async ($, on) => {
     setup(on, { ...initial, activity: { owner: 'ui-test', hidden: false, subagents: [
       { id: 'starting', model: '', confirmed: false, task: 'Starting work', tokens: 0, running: true },

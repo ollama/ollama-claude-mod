@@ -12,7 +12,6 @@ import { composeRoutingContext, submitRoutingContext, refreshQueuedRoutingContex
 import { clearFinishedAgents, readActivity, resetActivity, toggleActivity } from './activity'
 import { readAppearance, refreshAppearance } from './appearance'
 import { stopPulse } from './activity-view'
-import { dismissSummary, readSummary } from './summary'
 import { connectionAddress } from './route'
 
 const SHOW_RESPONSE_SPEED = 'show-response-speed'
@@ -243,10 +242,15 @@ export const register: Register = on => {
     const owner = await $.session.id()
     if (owner !== refreshedSession) await refresh($).catch(() => undefined)
     const userMessage = !e.isMeta && !e.command && (['composer', 'bridge', 'sdk'].includes(e.origin.kind) || e.origin.kind === 'plugin' && e.origin.asUser)
-    const summary = userMessage ? await readSummary($).catch(() => undefined) : undefined
+    const view = userMessage ? await readView($).catch(() => undefined) : undefined
     const result = await submitRoutingContext($, e, next)
-    if (result.drop === undefined && userMessage) await clearFinishedAgents($, owner)
-    if (result.drop === undefined && summary) await dismissSummary($, summary).catch(() => undefined)
+    if (result.drop === undefined && userMessage) {
+      await clearFinishedAgents($, owner)
+      if (view?.owner === owner && view.openMenu?.key === 'compact-mode') {
+        await updateView($, current => current.owner === owner && current.openMenu?.key === 'compact-mode'
+          ? { ...current, openMenu: null } : current).catch(() => undefined)
+      }
+    }
     return result
   })
   on('session.append', { door: 'hook-context' }, async ($, e, next) => {
