@@ -17,11 +17,11 @@ Restart Claude Code or run the following in Claude Code after installation:
 
 ## Get started
 
-New installs start with **Subagents** enabled. Claude Code opens with your usual Claude model, and subagents use Ollama. The initial Ollama model is DeepSeek Flash (`deepseek-v4.1-flash:cloud`).
+New installs start in **Subagents** mode. Claude runs the conversation and **Inkling 2 Small** (`inkling-2-small:cloud`) runs its subagents. Until you pick a model, switching to **Full** selects **Kimi K3.1 Pro** (`kimi-k3.1-pro:cloud`) for both.
 
 1. Run `/ollama` or select the three dots beside the mode picker to open Ollama settings.
 2. Use the mode selector above the prompt to choose **Full** for Ollama in the conversation and subagents, or **Subagents** to keep Claude in the conversation.
-3. Choose one Ollama model for the chat and its subagents. Select **Off** whenever you want Claude for both roles.
+3. To use the same Ollama model in either mode, choose it in settings or run `/ollama model MODEL`. An explicit choice stays selected when you switch modes, even if you picked the suggested model. Select **Off** whenever you want Claude for both roles.
 
 The mod applies your Ollama model and effort when it sends a request to Ollama. Claude Code keeps the model selected for the chat or subagent and uses that selection for its own usage reports and context window. You can change the session model with Claude's built-in `/model` picker. The Ollama bar shows the conversation model when Ollama is enabled. In **Subagents**, it can read Claude's initial effort from the current Desktop chat's saved selection before the first request. With **Off** selected, Claude's own status line shows the model and effort.
 
@@ -31,7 +31,7 @@ The mod applies your Ollama model and effort when it sends a request to Ollama. 
 | **Subagents** | Claude | Selected Ollama model |
 | **Off** | Claude | Claude |
 
-New chats inherit your last saved setup. Selecting **Off** keeps the Ollama model and the previously selected mode. The model picker includes local models and available Ollama cloud models. Type to search.
+New chats inherit your last saved model, mode, and effort. Resuming an existing chat restores its own setup. The model picker includes local models and available Ollama cloud models. Type to search.
 
 Settings shows the model and its supported effort options. Open **Advanced** for context length, the Ollama address, and request usage. Select the X to close settings and return to the compact status and worker activity. The compact mode button stays available after the first message. Errors remain visible when settings are closed. Workers show **Starting…** until their first response confirms the model.
 

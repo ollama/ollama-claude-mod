@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { EngineInterface } from 'claude-code'
-import { getPreferences, preferenceOwner } from '../hooks/runtime'
+import { copyChatPreferences, getPreferences, preferenceOwner } from '../hooks/runtime'
 import { DEFAULT_PREFERENCES, loadPreferences, savePreference, savePreferences } from '../hooks/settings'
 
 import { getConnection } from '../hooks/ollama'
@@ -42,7 +42,11 @@ test('Desktop process replacement keeps choices through the exact host identity'
 
   fixture.move('other-chat', HOST_B)
   expect(await getPreferences($)).toEqual(DEFAULT_PREFERENCES)
-  expect(await preferenceOwner($, 'other-chat')).toBe(`desktop:${HOST_B}`)
+  const other = await preferenceOwner($, 'other-chat')
+  expect(other).toBe(`desktop:${HOST_B}`)
+  await savePreference($, other, 'mode', 'full')
+  fixture.move('other-chat-after-clear', HOST_B)
+  expect((await getPreferences($)).model).toBe('kimi-k3.1-pro:cloud')
 })
 
 test('CLI resume follows the saved Desktop alias and updates the same choices', async () => {
@@ -88,7 +92,7 @@ test('a damaged saved Desktop alias is rejected without replacing it', async () 
 })
 
 
-test('a distinct new Desktop chat inherits the last complete setup and shared connection', async () => {
+test('a new Desktop chat inherits the last saved model, mode, effort, and connection', async () => {
   const fixture = desktop()
   const $ = fixture.engine
   fixture.values.set('connection-v1', 'http://local-ollama:11434')
@@ -103,4 +107,14 @@ test('a distinct new Desktop chat inherits the last complete setup and shared co
   fixture.move('cli-before-clear', HOST_A)
   expect(await getPreferences($)).toEqual(setup)
   expect(await getConnection($)).toEqual({ base: 'http://local-ollama:11434', key: '' })
+})
+
+test('branching a Desktop chat carries its pinned model into the new host session', async () => {
+  const fixture = desktop()
+  const $ = fixture.engine
+  const owner = await preferenceOwner($, 'cli-before-clear')
+  await savePreferences($, owner, chosen)
+  fixture.move('branch-cli', HOST_B)
+  expect(await copyChatPreferences($, 'cli-before-clear', 'branch-cli')).toEqual(chosen)
+  expect(await getPreferences($)).toEqual(chosen)
 })

@@ -41,9 +41,52 @@ async function rejected(promise: Promise<unknown>): Promise<boolean> {
 
 test('a fresh install enables only Ollama subagents with a cloud model ready before discovery', async () => {
   const store = storage()
-  const expected = { enabled: true, mode: 'subagent', model: 'deepseek-v4.1-flash:cloud' }
+  const expected = { enabled: true, mode: 'subagent', model: 'inkling-2-small:cloud' }
   expect(await loadPreferences(store.engine, 'fresh')).toEqual(expected)
-  expect(store.values.get('preferences:fresh')).toEqual({ version: 1, value: expected })
+  expect(store.values.get('preferences:fresh')).toEqual({ version: 2, value: { ...expected, model: null } })
+})
+
+test('automatic models follow the mode through Off, other edits, and new or branched chats', async () => {
+  const { engine, values } = storage()
+  await savePreference(engine, 'source', 'subagentEffort', 'low')
+  expect((await savePreference(engine, 'source', 'mode', 'full')).model).toBe('kimi-k3.1-pro:cloud')
+  expect((await savePreference(engine, 'source', 'enabled', false)).model).toBe('kimi-k3.1-pro:cloud')
+  expect(values.has('preferences:source:model')).toBe(false)
+  const source = await loadPreferences(engine, 'source')
+  expect(await loadPreferences(engine, 'fresh')).toEqual(source)
+  expect(await copyPreferences(engine, 'source', 'branch')).toEqual(source)
+  for (const id of ['fresh', 'branch', 'source']) {
+    expect((await savePreferences(engine, id, { enabled: true, mode: 'subagent' })).model).toBe('inkling-2-small:cloud')
+  }
+})
+
+test('existing chats and new-chat defaults honor a saved model even when it was a preset', async () => {
+  const { engine, values } = storage()
+  const deepseek = 'deepseek-v4.1-flash:cloud'
+  const kimi = 'kimi-k3.1-pro:cloud'
+  const options = { enabled: true, mode: 'subagent' }
+  const shared = { version: 1, value: { ...options, model: deepseek } }
+  const separate = { version: 1, value: { ...options, full: kimi, subagent: deepseek } }
+  for (const [id, record] of [['shared', shared], ['separate', separate]] as const) {
+    values.set(`preferences:${id}`, record)
+    expect((await loadPreferences(engine, id)).model).toBe(deepseek)
+    expect((await savePreference(engine, id, 'mode', 'full')).model).toBe(deepseek)
+  }
+  for (const version of [1, 2]) {
+    values.set('preference-defaults-v1', { version, value: shared.value })
+    const id = `fresh-${version}`
+    expect((await loadPreferences(engine, id)).model).toBe(deepseek)
+    expect((await savePreference(engine, id, 'mode', 'full')).model).toBe(deepseek)
+  }
+})
+
+test('explicitly picking the suggested model carries that choice into new chats and mode switches', async () => {
+  const { engine } = storage()
+  const model = (await loadPreferences(engine, 'first')).model
+  await savePreference(engine, 'first', 'model', model)
+  expect((await loadPreferences(engine, 'second')).model).toBe(model)
+  expect((await savePreference(engine, 'second', 'mode', 'full')).model).toBe(model)
+  expect((await loadPreferences(engine, 'third')).model).toBe(model)
 })
 
 test('migration keeps the model last shown in the picker across mode changes and reloads', async () => {
@@ -63,16 +106,15 @@ test('migration keeps the model last shown in the picker across mode changes and
   expect((await loadPreferences(engine, 'next')).model).toBe('shared-choice')
 })
 
-test('missing legacy models fall back to the other role and then the saved default', async () => {
+test('an older chat keeps its only saved model or follows its mode when both were empty', async () => {
   const { engine, values } = storage()
   values.set('preference-defaults-v1', { version: 1, value: { enabled: true, mode: 'subagent', subagent: 'my-default' } })
   values.set('preferences:partial', { version: 1, value: { enabled: true, mode: 'full', full: ' ', subagent: 'only-choice' } })
   values.set('preferences:partial:full', { version: 1, value: '' })
   values.set('preferences:empty', { version: 1, value: { enabled: true, mode: 'full' } })
   expect((await loadPreferences(engine, 'partial')).model).toBe('only-choice')
-  expect((await loadPreferences(engine, 'empty')).model).toBe('my-default')
-  await savePreference(engine, 'fresh', 'model', 'new-default')
-  expect((await loadPreferences(engine, 'empty')).model).toBe('my-default')
+  expect((await loadPreferences(engine, 'empty')).model).toBe('kimi-k3.1-pro:cloud')
+  expect((await savePreference(engine, 'empty', 'mode', 'subagent')).model).toBe('inkling-2-small:cloud')
 })
 
 test('a failed model migration can be retried without losing either legacy value', async () => {
@@ -92,7 +134,7 @@ test('preferences capture defaults once and isolate each chat', async () => {
   expect(await loadPreferences($, 'one', initial)).toEqual(initial)
   expect(await loadPreferences($, 'one', { ...initial, model: 'changed' })).toEqual(initial)
   await savePreference($, 'one', 'enabled', true)
-  expect(await loadPreferences($, 'two')).toEqual({ ...initial, enabled: true })
+  expect(await loadPreferences($, 'two')).toEqual(initial)
   expect(await loadPreferences($, 'one')).toEqual({ ...initial, enabled: true })
 })
 
@@ -132,7 +174,9 @@ test('damaged, unknown-version, and unreadable records are never replaced', asyn
   const $ = store.engine
   const damaged = [
     null,
-    { version: 2, value: DEFAULT_PREFERENCES },
+    { version: 3, value: DEFAULT_PREFERENCES },
+    { version: 2, value: { enabled: true, mode: 'subagent' } },
+    { version: 2, value: { ...DEFAULT_PREFERENCES, model: 1 } },
     { version: 1, value: { ...DEFAULT_PREFERENCES, mode: 'router' } },
     { version: 1, value: { ...DEFAULT_PREFERENCES, credentials: 'must not be accepted' } },
   ]
@@ -162,7 +206,7 @@ test('a malformed edited field cannot be hidden by a later save', async () => {
   expect(store.writes).toEqual([])
 })
 
-test('clear or branch copies choices once and does not follow later source edits', async () => {
+test('a branch copies its parent’s choice once and does not follow later source edits', async () => {
   const { engine: $ } = storage()
   await savePreference($, 'source', 'model', 'selected')
   await savePreference($, 'source', 'enabled', true)
@@ -200,11 +244,11 @@ test('reads, resume-style loads, and explicit copies never publish defaults', as
   await savePreference($, 'chosen', 'model', 'new-worker')
   await savePreference($, 'chosen', 'mode', 'subagent')
   await savePreference($, 'chosen', 'enabled', true)
-  const latest = await loadPreferences($, 'chosen')
+  expect((await loadPreferences($, 'chosen')).model).toBe('new-worker')
   expect(await copyPreferences($, 'old', 'branch')).toEqual(old)
   expect(await loadPreferences($, 'migration', old)).toEqual(old)
   expect(await loadPreferences($, 'old')).toEqual(old)
-  expect(await loadPreferences($, 'fresh')).toEqual(latest)
+  expect((await loadPreferences($, 'fresh')).model).toBe('new-worker')
 })
 
 test('a failed defaults update reports the saved chat and preserves prior new-chat defaults', async () => {
@@ -213,15 +257,15 @@ test('a failed defaults update reports the saved chat and preserves prior new-ch
   await savePreference($, 'one', 'model', 'before')
   store.fail('preference-defaults-v1')
   let message = ''
-  try { await savePreference($, 'one', 'model', 'after') }
+  try { await savePreferences($, 'one', { model: 'after', mode: 'full' }) }
   catch (error) { message = error instanceof Error ? error.message : String(error) }
   expect(message).toContain('Saved this chat')
   expect(message).toContain('could not update defaults')
   expect((await loadPreferences($, 'one')).model).toBe('after')
-  expect((await loadPreferences($, 'new')).model).toBe('before')
+  expect(await loadPreferences($, 'new')).toEqual({ ...DEFAULT_PREFERENCES, model: 'before' })
   store.fail('')
-  await savePreference($, 'one', 'model', 'after')
-  expect((await loadPreferences($, 'next')).model).toBe('after')
+  await savePreference($, 'one', 'mode', 'full')
+  expect(await loadPreferences($, 'next')).toEqual({ ...DEFAULT_PREFERENCES, mode: 'full', model: 'after' })
 })
 
 test('malformed or unreadable defaults cannot be overwritten by explicit saves', async () => {
@@ -229,7 +273,7 @@ test('malformed or unreadable defaults cannot be overwritten by explicit saves',
   const $ = store.engine
   const own = { ...DEFAULT_PREFERENCES, model: 'own-chat' }
   await loadPreferences($, 'one', own)
-  for (const damaged of [null, { version: 2, value: own }, { version: 1, value: { ...own, mode: 'router' } }]) {
+  for (const damaged of [null, { version: 3, value: own }, { version: 1, value: { ...own, mode: 'router' } }]) {
     store.values.set('preference-defaults-v1', damaged)
     expect(await rejected(savePreference($, 'one', 'model', 'replacement'))).toBe(true)
     expect(await rejected(loadPreferences($, 'new'))).toBe(true)
@@ -244,7 +288,7 @@ test('malformed or unreadable defaults cannot be overwritten by explicit saves',
 })
 
 
-test('one explicit patch publishes only its complete configuration as new-chat defaults', async () => {
+test('one explicit patch publishes the complete setup for the next chat', async () => {
   const store = storage()
   const $ = store.engine
   await loadPreferences($, 'one')
@@ -281,8 +325,8 @@ test('a partial patch failure preserves successful fields without publishing par
   expect(await loadPreferences($, 'one')).toEqual({ ...DEFAULT_PREFERENCES, model: 'native-choice', enabled: true })
   expect(await loadPreferences($, 'fresh')).toEqual({ ...DEFAULT_PREFERENCES, model: 'native-choice' })
   store.fail('')
-  const result = await savePreferences($, 'one', { enabled: true, mode: 'subagent', model: 'worker' })
-  expect(await loadPreferences($, 'next')).toEqual(result)
+  expect((await savePreferences($, 'one', { enabled: true, mode: 'full', model: 'worker' })).model).toBe('worker')
+  expect((await loadPreferences($, 'next')).model).toBe('worker')
 })
 
 test('patch publication rereads unrelated durable edits instead of overwriting them', async () => {
@@ -301,7 +345,7 @@ test('patch publication rereads unrelated durable edits instead of overwriting t
   expect(await loadPreferences($, 'fresh')).toEqual(expected)
 })
 
-test('existing disabled chats and defaults retain their saved modes and explicit models', async () => {
+test('disabled chats retain their saved model and new chats inherit Off', async () => {
   const store = storage()
   const disabled = { enabled: false, mode: 'full' as const, full: 'chosen-main', subagent: 'chosen-worker' }
   store.values.set('preferences:old', { version: 1, value: disabled })

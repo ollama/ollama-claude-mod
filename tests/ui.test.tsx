@@ -137,23 +137,33 @@ test('opening either picker shares cached discovery and refreshes native rows wh
   await ui.unmount()
 })
 
-test('desktop: the picker shares one model across Full, Subagents and Off', async ($, on) => {
-  const { values } = setup(on)
+test('desktop: modes choose a preset until the picker records a shared model', async ($, on) => {
+  const inkling = 'inkling-2-small:cloud'
+  const presets = [inkling, 'kimi-k3.1-pro:cloud'].map(name => ({ ...initial.models[0]!, name, isCloud: true }))
+  const { values } = setup(on, { ...initial, models: [...initial.models, ...presets] })
+  values.set('preferences:ui-test', { version: 2, value: { ...initial.preferences, mode: 'subagent', model: null } })
   const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'bar', props })
   await ui.press({ key: 'settings' })
-  expect((await ui.find({ key: 'model' }))?.props).toMatchObject({ label: 'First ▾' })
+  const selected = async () => (await ui.find({ key: 'model' }))?.props.label
+  expect(await selected()).toContain('Inkling 2 Small')
+  await ui.select({ key: 'compact-mode', value: 'full' })
+  expect(await selected()).toContain('Kimi K3.1 Pro')
   expect((await ui.find({ key: 'effort' }))?.props).toMatchObject({ value: 'high', options: [
     { value: 'low', label: 'Low' }, { value: 'high', label: 'High' }, { value: 'xhigh', label: 'Extra' },
   ] })
   await ui.select({ key: 'compact-mode', value: 'subagent' })
   expect(await ui.find({ type: 'Text', text: 'Claude runs this chat. Ollama runs eligible subagents.' })).toBeUndefined()
   expect(values.get('preferences:ui-test:mode')).toEqual({ version: 1, value: 'subagent' })
-  expect((await ui.find({ key: 'model' }))?.props).toMatchObject({ label: 'First ▾' })
+  expect(await selected()).toContain('Inkling 2 Small')
   expect((await ui.find({ key: 'effort' }))?.props.value).toBe('low')
   await ui.select({ key: 'effort', value: 'xhigh' })
   expect(values.get('preferences:ui-test:subagentEffort')).toEqual({ version: 1, value: 'xhigh' })
   await ui.select({ key: 'effort', value: 'low' })
   expect(values.get('preferences:ui-test:subagentEffort')).toEqual({ version: 1, value: null })
+  await ui.press({ key: 'model' })
+  await ui.press({ key: `model-option-${inkling}` })
+  await ui.select({ key: 'compact-mode', value: 'full' })
+  expect(await selected()).toContain('Inkling 2 Small')
   await ui.press({ key: 'model' })
   await ui.press({ key: 'model-option-second' })
   expect(values.get('preferences:ui-test:model')).toEqual({ version: 1, value: 'second' })
@@ -270,7 +280,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
-test('native new alias keeps chat preferences and rediscovers connection after the view resets', async ($, on) => {
+test('native new alias keeps the current chat’s model even when another chat saved a different one', async ($, on) => {
   const fixture = setup(on)
   fixture.values.set('connection-v1', 'http://saved-ollama:11434')
   fixture.values.set('preference-defaults-v1', { version: 1, value: { ...initial.preferences, mode: 'subagent', model: 'other-chat-default' } })
@@ -281,12 +291,14 @@ test('native new alias keeps chat preferences and rediscovers connection after t
     await $.session.end({ sessionId: 'ui-test', reason: 'clear', resume: { id: 'ui-test' } })
     fixture.session('after-new')
     fixture.resetState()
+    // The replacement can read its preferences before the command returns.
+    await $.classic.SessionStart({ source: 'clear', session_id: 'after-new' })
     return { text: '' }
   })
   fixture.http((_, e) => {
     requested.push(e.url)
     return { value: { status: 200, ok: true, headers: {}, text: e.url.endsWith('/api/tags')
-      ? JSON.stringify({ models: [{ name: 'first' }, { name: 'second' }] })
+      ? JSON.stringify({ models: [{ name: 'first' }, { name: 'inkling-2-small:cloud' }] })
       : JSON.stringify({ capabilities: ['tools'], thinking: { values: ['low', 'high'] } }) } }
   })
   on('settings.read', () => ({ value: {} }))
@@ -296,11 +308,10 @@ test('native new alias keeps chat preferences and rediscovers connection after t
   // Installed Claude resolves /new to its canonical clear command. No
   // session.start follows it; the classic clear lifecycle fires instead.
   await $.command.run({ command: 'clear', args: '' } as Parameters<typeof $.command.run>[0])
-  await $.classic.SessionStart({ source: 'clear', session_id: 'after-new' })
   const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'cleared', props })
   expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
   await ui.press({ key: 'settings' })
-  expect(fixture.values.get('preferences:after-new')).toEqual({ version: 1, value: initial.preferences })
+  expect(fixture.values.get('preferences:after-new')).toEqual({ version: 2, value: initial.preferences })
   expect(fixture.state().notice).toBe('')
   expect(requested).toContain('http://saved-ollama:11434/api/tags')
   expect(fixture.state().connected).toBe(true)
@@ -459,7 +470,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect((await ui.find({ key: 'compact-mode' }))?.props).toMatchObject(off)
     expect(await ui.find({ key: 'settings-panel' })).toBeUndefined()
     expect(await ui.find({ key: 'model-search' })).toBeUndefined()
-    expect((fixture.values.get('preferences:new-chat') as { value: unknown }).value).toEqual(fixture.state().preferences)
+    expect(fixture.values.get('preferences:new-chat')).toEqual({ version: 2, value: { ...initial.preferences, enabled: false } })
     await ui.unmount()
     fixture.session('ui-test')
     ui = await mount()
