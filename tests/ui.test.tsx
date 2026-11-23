@@ -145,7 +145,18 @@ test('desktop settings align field labels and stack them when space is limited',
   expect(await ui.find({ type: 'Text', text: 'Ollama settings' })).toBeUndefined()
   expect((await ui.find({ key: 'settings-panel' }))?.props.paddingTop).toBe('md')
   expect(await ui.find({ type: 'Text', text: 'Advanced' })).toBeUndefined()
+  const chevron = async (alt: string) => (await ui.findAll({ type: 'Svg' })).find(icon => icon.props.alt === alt)?.props
+  const collapsed = await chevron('Expand advanced settings')
+  expect(collapsed).toMatchObject({ width: 14, height: 14 })
+  expect(collapsed?.source).toContain('M3 4.5 6 7.5 9 4.5')
+  const control = await ui.find({ key: 'advanced-control' })
+  expect(control?.children[0]).toMatchObject({ props: { width: 13, paddingTop: 0.25 }, children: [{ type: 'Svg' }] })
+  expect(control?.children[1]).toMatchObject({
+    props: { width: 13, marginLeft: -13, flexDirection: 'column', alignItems: 'stretch' },
+    children: [{ type: 'Button', props: { key: 'advanced' } }],
+  })
   await ui.press({ key: 'advanced' })
+  expect((await chevron('Collapse advanced settings'))?.source).toContain('M3 7.5 6 4.5 9 7.5')
   const fields = ['Model', 'Effort', 'Context length', 'Ollama address', 'Response speed', 'Ollama usage']
   const rows = async () => (await ui.findAll({ type: 'Box' })).filter(row => fields.includes(row.key ?? ''))
   const wide = await rows()
@@ -162,7 +173,7 @@ test('desktop settings align field labels and stack them when space is limited',
   expect((await ui.find({ key: 'endpoint' }))?.props.value).toBe(initial.endpoint)
   await ui.press({ key: 'advanced' })
   expect(await ui.find({ key: 'settings-details' })).toBeUndefined()
-  expect((await ui.find({ key: 'advanced' }))?.props.label).toBe('Advanced ▾')
+  expect(await chevron('Expand advanced settings')).toEqual(collapsed)
   expect(writes).toEqual([])
   await ui.unmount()
 })
@@ -800,7 +811,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
   test(`${surface}: completed agents can be inspected after the model, effort, and speed`, async ($, on) => {
     const fixture = setup(on, { ...initial, activity: {
       main: { target: 'first', model: 'first', tokens: 160, tokensPerSecond: 32, running: false },
-      owner: 'ui-test', hidden: true, subagents: Array.from({ length: 5 }, (_, i) => ({ id: String(i), model: 'second', task: `Task ${i}`, tokens: 12, running: false })),
+      owner: 'ui-test', hidden: true, subagents: Array.from({ length: 12 }, (_, i) => ({ id: String(i), model: 'second', task: `Task ${i}`, tokens: 12, running: false })),
     } })
     fixture.values.set('show-response-speed', true)
     on('prompt.submit', (_, e) => ({ text: e.text }))
@@ -810,19 +821,39 @@ for (const surface of ['desktop', 'terminal'] as const) {
         { type: 'Text', children: ['First'] },
         { type: 'Text' },
         { type: 'Text', children: ['· 32 tok/s'] },
-        { type: 'Button', props: { key: 'subagents-toggle', label: '5 subagents ▾' } },
+        { props: { key: surface === 'desktop' ? 'subagents-toggle-control' : 'subagents-toggle' } },
       ],
     })
-    expect(await ui.find({ key: 'subagent-0' })).toBeUndefined()
+    const expectChevron = async (expanded: boolean) => {
+      const label = String((await ui.find({ key: 'subagents-toggle' }))?.props.label).trim()
+      if (surface === 'terminal') {
+        expect(label).toBe(`12 subagents ${expanded ? '˄' : '˅'}`)
+        return
+      }
+      expect(label).toBe('12 subagents')
+      const alt = `${expanded ? 'Collapse' : 'Expand'} subagent list`
+      const icon = (await ui.findAll({ type: 'Svg' })).find(node => node.props.alt === alt)
+      expect(icon?.props).toMatchObject({ width: 14, height: 14 })
+      expect(icon?.props.source).toContain(expanded ? 'M3 7.5 6 4.5 9 7.5' : 'M3 4.5 6 7.5 9 4.5')
+    }
+    await expectChevron(false)
+    if (surface === 'desktop') {
+      const control = await ui.find({ key: 'subagents-toggle-control' })
+      expect(control?.children[0]).toMatchObject({ props: { width: 17 }, children: [{ type: 'Svg' }] })
+      expect(control?.children[1]).toMatchObject({
+        props: { width: 17, marginLeft: -17, alignItems: 'stretch' },
+        children: [{ type: 'Button', props: { key: 'subagents-toggle' } }],
+      })
+    }
+    expect(await ui.find({ key: 'subagent-11' })).toBeUndefined()
     await ui.press({ key: 'subagents-toggle' })
-    expect((await ui.find({ key: 'subagents-toggle' }))?.props.label).toBe('5 subagents ▴')
+    await expectChevron(true)
     if (surface === 'desktop') {
       expect(await ui.find({ type: 'Text', text: 'All done' })).toBeUndefined()
       expect(await ui.find({ type: 'Text', text: '✓' })).toBeUndefined()
       expect(await ui.find({ type: 'Text', text: '↳' })).toBeUndefined()
     }
-    expect(await ui.find({ key: 'subagent-0' })).toBeDefined()
-    expect(await ui.find({ key: 'subagent-4' })).toBeDefined()
+    expect(await ui.find({ key: 'subagent-11' })).toBeDefined()
     await $.prompt.submit({ text: 'Next question', wait: false, origin: { kind: 'composer' } })
     expect(await ui.find({ key: 'subagents-toggle' })).toBeUndefined()
     await ui.unmount()
@@ -842,7 +873,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     } })
     const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: 'agents', props })
     expect((await ui.find({ key: 'summary' }))?.children[0]).toMatchObject({
-      children: [{ type: 'Text' }, { type: 'Text' }, { type: 'Button', props: { key: 'subagents-toggle' } }],
+      children: [{ type: 'Text' }, { type: 'Text' }, { props: { key: surface === 'desktop' ? 'subagents-toggle-control' : 'subagents-toggle' } }],
     })
     expect(await ui.find({ key: 'subagent-old' })).toBeUndefined()
     expect(await ui.find({ key: 'subagent-older' })).toBeUndefined()
@@ -863,7 +894,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     await ui.press({ key: 'subagents-toggle' })
     expect(await ui.find({ key: 'subagent-running' })).toBeUndefined()
     expect(await ui.find({ key: 'subagents-left' })).toBeUndefined()
-    expect((await ui.find({ key: 'subagents-toggle' }))?.props.label).toBe('6 subagents ▾')
+    expect(String((await ui.find({ key: 'subagents-toggle' }))?.props.label).trim()).toBe(surface === 'desktop' ? '6 subagents' : '6 subagents ˅')
     if (surface === 'desktop') expect(await ui.find({ type: 'Text', text: '2 running, 1 stopped' })).toBeUndefined()
     await ui.press({ key: 'subagents-toggle' })
     expect(await ui.find({ key: 'subagent-running' })).toBeDefined()
@@ -1055,9 +1086,9 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(f.state().notice).toBe(failure)
     expect(await ui.find({ type: 'Text', text: failure })).toBeDefined()
     await ui.press({ key: 'model' })
-    expect((await ui.find({ key: 'advanced' }))?.props.label).toBe('Advanced ▾')
+    expect(String((await ui.find({ key: 'advanced' }))?.props.label).trim()).toBe(surface === 'desktop' ? 'Advanced' : 'Advanced ˅')
     await ui.press({ key: 'advanced' })
-    expect((await ui.find({ key: 'advanced' }))?.props.label).toBe('Advanced ▴')
+    expect(String((await ui.find({ key: 'advanced' }))?.props.label).trim()).toBe(surface === 'desktop' ? 'Advanced' : 'Advanced ˄')
     expect(await ui.find({ key: 'endpoint' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '0 requests · 0 input tokens · 0 output tokens' })).toBeDefined()
     await ui.press({ key: 'settings' })

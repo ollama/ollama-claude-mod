@@ -23,6 +23,15 @@ export function claudeSvg(): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="-60 -60 1320 1320"><path fill="#d97757" d="${CLAUDE}"/></svg>`
 }
 
+export function chevronSvg(direction: 'up' | 'down'): string {
+  const path = direction === 'down' ? 'M3 4.5 6 7.5 9 4.5' : 'M3 7.5 6 4.5 9 7.5'
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12">
+    <style>@media (prefers-color-scheme: dark) { path { stroke: #b5b5b5 } }
+      @media (forced-colors: active) { path { stroke: ButtonText } }</style>
+    <path d="${path}" fill="none" stroke="#646464" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`
+}
+
 // A redraw restarts the SVG pulse; the terminal keeps its frame separately.
 export function dotsSvg(): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="6" viewBox="0 0 18 6"><style>${INK}circle{opacity:.25;animation:p 1.2s ease-in-out infinite}circle:nth-child(2){animation-delay:.2s}circle:nth-child(3){animation-delay:.4s}@keyframes p{40%{opacity:1}}</style><g class="f"><circle cx="3" cy="3" r="2"/><circle cx="9" cy="3" r="2"/><circle cx="15" cy="3" r="2"/></g></svg>`

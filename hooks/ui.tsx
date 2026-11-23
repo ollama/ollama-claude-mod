@@ -1,6 +1,7 @@
 import type { EngineInterface, RenderElement, RenderInput } from 'claude-code'
 import type { ActivityState, Mode, ModelWindow, OpenMenu, SubagentActivity, Thinking, ViewState } from '../types'
 import { activityElements, displayName, setPulse, shownSubagents, tokenCount } from './activity-view'
+import { chevronSvg } from './icons'
 import { pickerMenu } from './menu'
 import type { Menu } from './menu'
 import { modelChoices, modelLabel } from './catalog'
@@ -24,6 +25,7 @@ export type UIActions = {
 
 // Desktop measures box widths in character cells. This matches its 28 px control height.
 const settingsButtonColumns = 3.75
+const chevronSize = 14
 
 const effortLabels: Record<Thinking, string> = {
   off: 'Off', on: 'On', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max',
@@ -81,6 +83,7 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
   const currentEffort = effort && efforts.includes(effort) ? effort : selected?.defaultEffort
   const isTerminal = e.surface === 'terminal'
   const isDesktop = e.surface === 'desktop'
+  const Svg = isDesktop && 'Svg' in els ? els.Svg : undefined
   const closeIcon = isDesktop ? '✕' : '×'
   const settingsIcon = state.settingsOpen ? closeIcon : '⋯'
   const settingsName = state.settingsOpen ? 'Close Ollama settings' : 'Open Ollama settings'
@@ -102,6 +105,21 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
   const picker = (menu: Menu) => isTerminal || menu.searchable
     ? pickerMenu($, e, state.openMenu, menu, actions.setOpenMenu)
     : <Select key={menu.key} label={menu.label} value={menu.value} options={menu.options} onSelect={menu.onSelect} />
+  const disclosure = (key: string, label: string, subject: string, expanded: boolean, onPress: () => Promise<void>) => {
+    if (!Svg) return <Button key={key} plain dimColor label={`${label} ${expanded ? '˄' : '˅'}`} onPress={onPress} />
+    // Desktop buttons accept text. Reserve space for the chevron and cover both with one press target.
+    const columns = label.length + 5
+    return <Box key={`${key}-control`} flexDirection="row" alignItems="center" columnGap={0} flexShrink={0}>
+      <Box width={columns} flexDirection="column" flexShrink={0} alignItems="flex-end"
+        justifyContent="center" paddingRight={1} paddingTop={0.25}>
+        <Svg source={chevronSvg(expanded ? 'up' : 'down')} alt={`${expanded ? 'Collapse' : 'Expand'} ${subject}`}
+          width={chevronSize} height={chevronSize} />
+      </Box>
+      <Box width={columns} marginLeft={-columns} flexDirection="column" alignItems="stretch" flexShrink={0} overflow="visible">
+        <Button key={key} plain dimColor label={`${label}\u2003`} onPress={onPress} />
+      </Box>
+    </Box>
+  }
   const window = state.modelWindow?.model === model && state.modelWindow.endpoint === state.endpoint ? state.modelWindow : undefined
   const automaticContext = window?.detected ?? window?.defaultContext ?? (window?.override === undefined ? window?.effective : undefined)
   const contextValue = String(window?.override ?? automaticContext ?? 'auto')
@@ -144,9 +162,7 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
           {preferences.enabled && summaryEffort ? <Text key="summary-effort" dimColor wrap="truncate-end">{summaryEffort}</Text> : null}
           {showResponseSpeed && main?.tokensPerSecond !== undefined && Number.isFinite(main.tokensPerSecond)
             ? <Text key="summary-speed" dimColor tabular wrap="truncate-end">{`${summary ? '· ' : ''}${Math.round(main.tokensPerSecond * 10) / 10} tok/s`}</Text> : null}
-          {rows.length > 0 ? <Button key="subagents-toggle" plain dimColor
-            label={`${countLabel} ${hidden ? '▾' : '▴'}`}
-            onPress={actions.toggleSubagents} /> : null}
+          {rows.length > 0 ? disclosure('subagents-toggle', countLabel, 'subagent list', !hidden, actions.toggleSubagents) : null}
         </Box>
         {picker({ key: 'compact-mode', label: '', value: preferences.enabled ? preferences.mode : 'never',
           options: modeOptions, onSelect: value => actions.setMode(value as Mode | 'never') })}
@@ -197,8 +213,8 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
           {!openRow ? (
             // Offset Desktop's button padding to line the text up with the field labels.
             <Box alignSelf="flex-start" marginLeft={isDesktop ? -1.25 : undefined}>
-              <Button key="advanced" plain dimColor label={advanced ? 'Advanced ▴' : 'Advanced ▾'}
-                onPress={() => actions.setOpenMenu(advanced ? null : { key: 'advanced' })} />
+              {disclosure('advanced', 'Advanced', 'advanced settings', advanced,
+                () => actions.setOpenMenu(advanced ? null : { key: 'advanced' }))}
             </Box>
           ) : null}
           {advanced ? <Box key="settings-details" flexDirection="column" rowGap={settingsGap}>
