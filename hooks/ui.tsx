@@ -93,6 +93,7 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
   const notice = state.notice || (preferences.enabled || state.settingsOpen ? state.connectionIssue : undefined)
   const rows = preferences.enabled ? state.activity?.subagents ?? [] : []
   const hidden = state.activity?.hidden ?? false
+  const countLabel = `${rows.length} ${rows.length === 1 ? 'subagent' : 'subagents'}`
   const shown = hidden ? [] : shownSubagents(rows, Math.max(1, Math.min(5, e.props.maxRows - 2)))
   const remaining = !hidden && shown.length < rows.length ? rows.filter(row => !shown.includes(row)) : []
   const usage = state.activity?.ollama ?? { requests: 0, inputTokens: 0, outputTokens: 0 }
@@ -110,11 +111,12 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
       <Box key="summary" flexDirection="row" alignItems="center" flexWrap="wrap" columnGap={1}>
         <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap={1} flexGrow={1} flexShrink={1} minWidth={0}>
           {summary ? <Text key="summary-status" weight="bold" color={isClaude ? 'claude' : undefined} wrap="truncate-end">{summary}</Text> : null}
-          {rows.length > 0 ? <Button key="subagents-toggle" plain dimColor
-            label={`${rows.length} ${rows.length === 1 ? 'subagent' : 'subagents'} ${hidden ? '▾' : '▴'}`} onPress={actions.toggleSubagents} /> : null}
-          {preferences.enabled && summaryEffort ? <Text key="summary-effort" dimColor wrap="truncate-end">{`· ${summaryEffort}`}</Text> : null}
+          {preferences.enabled && summaryEffort ? <Text key="summary-effort" dimColor wrap="truncate-end">{summaryEffort}</Text> : null}
           {showResponseSpeed && main?.tokensPerSecond !== undefined && Number.isFinite(main.tokensPerSecond)
             ? <Text key="summary-speed" dimColor tabular wrap="truncate-end">{`${summary ? '· ' : ''}${Math.round(main.tokensPerSecond * 10) / 10} tok/s`}</Text> : null}
+          {rows.length > 0 ? <Button key="subagents-toggle" plain dimColor
+            label={`${countLabel} ${hidden ? '▾' : '▴'}`}
+            onPress={actions.toggleSubagents} /> : null}
         </Box>
         {picker({ key: 'compact-mode', label: '', value: preferences.enabled ? preferences.mode : 'never',
           options: modeOptions, onSelect: value => actions.setMode(value as Mode | 'never') })}
@@ -136,21 +138,24 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
         )}
       </Box>
       {notice ? <Text key="notice">{notice}</Text> : null}
-      {shown.map(row => <Box key={`subagent-${row.id}`} flexDirection="row" alignItems="center" columnGap={2} paddingLeft={1}>
+      {shown.map(row => <Box key={`subagent-${row.id}`} flexDirection="row" alignItems="center" columnGap={2} paddingLeft={isDesktop ? 2 : 1}>
         <Box flexDirection="row" alignItems="center" columnGap={1} flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text dimColor>↳</Text>
+          {!isDesktop ? <Text dimColor>↳</Text> : null}
           <Box flexShrink={1} minWidth={0}><Text weight="medium" color={/^(claude|opus|sonnet|haiku)/i.test(row.model) ? 'claude' : undefined} wrap="truncate-end">{workerName(row)}</Text></Box>
           <Box flexShrink={1000} minWidth={0}><Text dimColor wrap="truncate-end">{`· ${row.task}`}</Text></Box>
+          {isDesktop && (row.failed || row.running && row.confirmed !== false) ? <Text dimColor={!row.failed}
+            color={row.failed ? 'warning' : undefined}>{row.failed ? 'Stopped' : 'Running'}</Text> : null}
         </Box>
         <Box flexShrink={0}><Text key={`tokens-${row.id}`} dimColor tabular>{`${tokenCount(row.tokens)} tokens`}</Text></Box>
-        <Box width={row.failed ? 7 : 3} flexShrink={0} flexDirection="row" alignItems="center" justifyContent="flex-end">
+        {!isDesktop ? <Box width={row.failed ? 7 : 3} flexShrink={0} flexDirection="row" alignItems="center" justifyContent="flex-end">
           {row.running ? visuals.dots(`dots-${row.id}`) : row.failed
             ? <Text key={`status-${row.id}`} color="warning">Stopped</Text>
             : <Text key={`status-${row.id}`} color="success">✓</Text>}
-        </Box>
+        </Box> : null}
       </Box>)}
-      {remaining.length > 0 ? <Box key="subagents-left" flexDirection="row" columnGap={1} paddingLeft={1}>
-        <Text dimColor>↳</Text><Text dimColor>{`+${remaining.length} ${remaining.every(row => !row.running && !row.failed) ? 'done' : 'more'}`}</Text>
+      {remaining.length > 0 ? <Box key="subagents-left" flexDirection="row" columnGap={1} paddingLeft={isDesktop ? 2 : 1}>
+        {!isDesktop ? <Text dimColor>↳</Text> : null}
+        <Text dimColor>{`+${remaining.length} ${!isDesktop && remaining.every(row => !row.running && !row.failed) ? 'done' : 'more'}`}</Text>
       </Box> : null}
       {state.settingsOpen ? (
         <Box key="settings-panel" flexDirection="column" paddingTop={isDesktop ? 'md' : undefined} rowGap={settingsGap}>
