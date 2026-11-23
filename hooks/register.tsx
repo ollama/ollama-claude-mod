@@ -13,6 +13,7 @@ import { clearFinishedAgents, readActivity, resetActivity, toggleActivity } from
 import { readAppearance, refreshAppearance } from './appearance'
 import { stopPulse } from './activity-view'
 import { dismissSummary, readSummary } from './summary'
+import { connectionAddress } from './route'
 
 const SHOW_RESPONSE_SPEED = 'show-response-speed'
 
@@ -99,8 +100,23 @@ async function contextLimit($: EngineInterface, value: string, owner: string, ba
   } catch (error) { if (await $.session.id() === owner) await notice($, message(error)) }
 }
 
+// The launcher already configures Claude's provider and model. Match its host
+// marker and endpoint so other managed providers can still use the mod.
+async function usesOllamaLauncher($: EngineInterface): Promise<boolean> {
+  if (await $.env.get('CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST') !== '1') return false
+  const provider = await $.env.get('ANTHROPIC_BASE_URL')
+  if (!provider) return false
+  const host = await $.env.get('OLLAMA_HOST')
+  try { return connectionAddress(provider) === connectionAddress(host ?? '') }
+  catch { return false }
+}
+
+let launched: boolean | undefined
+const isLaunched = async ($: EngineInterface) => launched ??= await usesOllamaLauncher($)
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
     await resetWindows($, true).catch(() => undefined)
     const started = await next(e)
     await resetActivity($, await $.session.id()).catch(() => undefined)
@@ -113,6 +129,7 @@ export const register: Register = on => {
   // Native /new is a clear alias. The classic lifecycle also covers a
   // replacement session that has no native session.start or command callback.
   on('classic.SessionStart', async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
     const result = await next(e)
     if (await $.session.id() !== refreshedSession) {
       await resetActivity($, await $.session.id()).catch(() => undefined)
@@ -122,13 +139,18 @@ export const register: Register = on => {
     return result
   })
 
-  on('config.describe', { key: 'ollama.modelCatalog' }, async ($, e, next) => ({ ...await next(e), isHidden: true }))
+  on('config.describe', { key: 'ollama.modelCatalog' }, async ($, e, next) => {
+    const result = await next(e)
+    return await isLaunched($) ? result : { ...result, isHidden: true }
+  })
   on('config.set', { key: 'theme' }, async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
     const result = await next(e)
     await refreshAppearance($).catch(() => undefined)
     return result
   })
   on('classic.PostModelSwitch', async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
     const owner = e.session_id
     const result = await next(e)
     if (!['command', 'picker', 'sdk'].includes(e.source) || !await isCurrentMainSwitch($, e)) return result
@@ -145,6 +167,7 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
     stopPulse()
     if (e.reason === 'clear') rememberClear(e.sessionId)
     await resetWindows($).catch(() => undefined)
@@ -152,6 +175,7 @@ export const register: Register = on => {
   })
 
   on('command.run', async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
     if (!['clear', 'new', 'reset', 'branch', 'resume'].includes(e.command)) return next(e)
     preferenceRevision++
     refreshVersion++
@@ -169,11 +193,13 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'model' }, async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
     if (!e.args.trim()) await refresh($, false, true).catch(() => undefined)
     return next(e)
   })
 
-  on('command.run', { command: 'ollama' }, async ($, e) => {
+  on('command.run', { command: 'ollama' }, async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
     try {
       const [command, ...rest] = e.args.trim().split(/\s+/)
       if (command === 'uninstall') {
@@ -208,8 +234,12 @@ export const register: Register = on => {
     } catch (error) { return { text: message(error), isTextDisplayOnly: true, exitCode: 1 } }
   })
 
-  on('prompt.compose', ($, e, next) => composeRoutingContext($, e, next))
+  on('prompt.compose', async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
+    return composeRoutingContext($, e, next)
+  })
   on('prompt.submit', async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
     const owner = await $.session.id()
     if (owner !== refreshedSession) await refresh($).catch(() => undefined)
     const userMessage = !e.isMeta && !e.command && (['composer', 'bridge', 'sdk'].includes(e.origin.kind) || e.origin.kind === 'plugin' && e.origin.asUser)
@@ -219,15 +249,32 @@ export const register: Register = on => {
     if (result.drop === undefined && summary) await dismissSummary($, summary).catch(() => undefined)
     return result
   })
-  on('session.append', { door: 'hook-context' }, ($, e, next) => refreshQueuedRoutingContext($, e, next))
+  on('session.append', { door: 'hook-context' }, async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
+    return refreshQueuedRoutingContext($, e, next)
+  })
+  // Only records replies for workers this activation routed through Ollama.
   on('session.append', { door: 'response' }, recordWorkerResponse)
 
-  on('agent.spawn', ($, e, next) => executionSpawn($, e, next))
-  on('turn.step', async function* ($, e, next) { return yield* executionStep($, e, next) })
-  on('turn.complete', ($, e, next) => executionComplete($, e, next))
-  on('http.fetch', ($, e, next) => executionFetch($, e, next))
+  on('agent.spawn', async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
+    return executionSpawn($, e, next)
+  })
+  on('turn.step', async function* ($, e, next) {
+    if (await isLaunched($)) return yield* next(e)
+    return yield* executionStep($, e, next)
+  })
+  on('turn.complete', async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
+    return executionComplete($, e, next)
+  })
+  on('http.fetch', async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
+    return executionFetch($, e, next)
+  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (await isLaunched($)) return next(e)
     if (e.props.hasSurvey) {
       stopPulse(e.requestId)
       return next(e)
