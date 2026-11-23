@@ -194,7 +194,10 @@ test('desktop settings align field labels and stack them when space is limited',
   expect(control).toMatchObject({
     props: { flexDirection: 'column', alignItems: 'stretch' },
     children: [
-      { type: 'Box', props: { height: 0, justifyContent: 'flex-end' } },
+      {
+        type: 'Box', props: { height: 0, justifyContent: 'flex-end' },
+        children: [{ props: { paddingTop: 0.5 }, children: [{ type: 'Svg' }] }],
+      },
       { type: 'Box', children: [{ type: 'Button', props: { key: 'advanced' } }] },
     ],
   })
