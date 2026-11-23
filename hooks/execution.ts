@@ -4,13 +4,14 @@ import { getPreferences, readView, updateView } from './runtime'
 import { getConnection, prepareRequest, OllamaConnectionError, OllamaRequestError } from './ollama'
 import { invalidateStaleConnection } from './discovery'
 import type { Connection } from './ollama'
-import { toOllamaBody, wholeRequest, withoutUnsignedThinking, workflowContinuation } from './route'
+import { toOllamaBody, toolResultsMatch, wholeRequest, withoutUnsignedThinking, workflowContinuation } from './route'
 import { captureWindow, releaseWindow } from './window'
 import { isOllamaModel, rememberNativeModel, resolveNativeModel } from './models'
 import { cancelInferenceSelection } from './selection'
 import { activityTime, recordOllamaUsage, startAgentActivity, startMainActivity, updateAgentActivity, updateMainActivity } from './activity'
 
 type Body = Parameters<typeof toOllamaBody>[0]
+type HistoryEntry = { request: Body; replyUuid?: string }
 type Run = {
   sessionId: string
   connection?: Connection
@@ -37,7 +38,7 @@ type Run = {
 const turns = new Map<string, Run>()
 const agents = new Map<string, Run>()
 const inFlight = new Map<string, Run>()
-const history = new Map<string, Body>()
+const history = new Map<string, HistoryEntry>()
 const noticeRevisions = new Map<string, number>()
 const MAIN = 'main'
 const CHOOSE_NATIVE = 'Choose a Claude model with /model for native requests.'
@@ -128,10 +129,18 @@ async function saveTemplate($: EngineInterface, run: Run, loop: string, body: Bo
 
 function remember($: EngineInterface, run: Run, loop: string, body: Body): void {
   run.lastRequest = body
-  history.set(historyKey(run, loop), body)
+  history.set(historyKey(run, loop), { request: body })
   // Cache only the exact system/tool template, never messages or HTTP headers.
   // Do not hold an accepted native stream open for optional disk persistence.
   void saveTemplate($, run, loop, body)
+}
+
+async function continuesRememberedReply($: EngineInterface, entry?: HistoryEntry): Promise<boolean> {
+  if (!entry?.replyUuid) return false
+  const following = await $.session.messages({ after: entry.replyUuid }).catch(() => undefined)
+  // A rewind or compaction can remove the row. A later native reply can pass it.
+  // The host caps a ranged read at 4096 rows, so a full page cannot prove it is current.
+  return Array.isArray(following) && following.length < 4096 && following.every(row => row.role === 'user')
 }
 
 async function forwardNative($: EngineInterface, run: Run, loop: string, e: Parameters<Hook<'http.fetch'>>[1], next: Parameters<Hook<'http.fetch'>>[2], body: Body) {
@@ -320,6 +329,12 @@ export async function executionComplete($: Parameters<Hook<'turn.complete'>>[0],
       inFlight.delete(e.agentId)
     } else {
       if (run) {
+        const entry = history.get(historyKey(run, MAIN))
+        if (completed && e.reason === 'answer' && !e.isAborted && run.accepted && !run.failed && entry && entry.request === run.lastRequest) {
+          const rows = await $.session.messages({ last: 1 }).catch(() => undefined)
+          const reply = Array.isArray(rows) ? rows.at(-1) : undefined
+          if (reply?.role === 'assistant') entry.replyUuid = reply.uuid
+        }
         await updateMainActivity($, run.sessionId, { model: run.actualModel ?? (run.model || run.nativeModel), target: run.model, effort: run.activityEffort, tokens: run.output ?? 0, ...(run.duration ? { tokensPerSecond: (run.measuredOutput ?? 0) * 1000 / run.duration } : {}), running: false })
         await releaseWindow($, run).catch(() => undefined)
       }
@@ -429,7 +444,9 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
     if (!restored) return fail($, run, 'history', 'The workflow agent’s previous reply could not be matched to this request. Rerun the workflow.')
     whole = restored
   } else if (continued) {
-    let before = history.get(historyKey(run, loop))
+    const added = body.messages ?? []
+    const entry = history.get(historyKey(run, loop))
+    let before = entry?.request
     if (!before) {
       try { before = template(await $.store.get(templateKey(run, loop))) }
       catch { /* Missing or unreadable templates cannot reconstruct a request. */ }
@@ -440,25 +457,29 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
     if (!before) return fail($, run, 'history', 'The conversation template is unavailable. Start a new conversation.')
     try {
       const transcript = await $.session.messages({ as: 'api', ...(loop !== MAIN ? { agentId: loop } : {}) })
-      const lastAssistant = Array.isArray(transcript) ? transcript.findLastIndex(message => message.role === 'assistant') : -1
-      if (next.signal.aborted) return { deny: 'Request cancelled.' }
-      if (lastAssistant < 0) return fail($, run, 'history', 'The previous assistant response is unavailable. Start a new conversation.')
       const messages = Array.isArray(transcript) ? transcript : []
-      const added = body.messages ?? []
-      const hasDelta = added.length > 0 && JSON.stringify(messages.slice(-added.length)) === JSON.stringify(added)
-      // Native tool continuations append user results and inline system
-      // updates. The API transcript omits those per-send system updates. When
-      // this run captured the previous request, retain it exactly and add the
-      // latest assistant plus the exact incoming user/system delta.
-      const userSystemDelta = added[0]?.role === 'user' && added.every(message => message.role === 'user' || message.role === 'system')
-      if (run.lastRequest && userSystemDelta) {
-        whole = wholeRequest(run.lastRequest, body, messages[lastAssistant])
+      const lastAssistant = messages.findLastIndex(message => message.role === 'assistant')
+      const reply = messages[lastAssistant]
+      if (next.signal.aborted) return { deny: 'Request cancelled.' }
+      if (!reply) return fail($, run, 'history', 'The previous assistant response is unavailable. Start a new conversation.')
+      const userUpdate = added.some(message => message.role === 'user') &&
+        added.every(message => message.role === 'user' || message.role === 'system')
+      if (userUpdate) {
+        if (!run.lastRequest && !toolResultsMatch(reply, added)) {
+          return fail($, run, 'history', 'The tool results do not match the previous assistant response.')
+        }
+        // Keep the exact wire prefix when its reply still ends this conversation.
+        // Otherwise read the current branch up to that reply. In both cases the
+        // incoming messages supply the pending user input and inline system updates.
+        const previous = run.lastRequest ?? (await continuesRememberedReply($, entry) ? before : undefined)
+        const prefix = previous ?? { ...before, messages: messages.slice(0, lastAssistant) }
+        whole = wholeRequest(prefix, body, reply)
       }
-      else if (hasDelta) whole = { ...before, ...body, system: before.system, tools: body.tools ?? before.tools, thread: undefined, messages }
-      else if (added.length > 0 && added.every(message => message.role === 'user')) {
-        whole = wholeRequest({ ...before, messages: messages.slice(0, lastAssistant + 1) }, body, undefined)
+      else if (added.length && JSON.stringify(messages.slice(-added.length)) === JSON.stringify(added)) {
+        whole = { ...before, ...body, system: before.system, tools: body.tools ?? before.tools, thread: undefined, messages }
       }
       else return fail($, run, 'history', 'This continuation cannot be reconstructed safely. Start a new conversation.')
+      if (run.sessionId !== await $.session.id()) return { deny: 'The chat changed before its continuation could be sent.' }
     } catch (error) {
       if (next.signal.aborted) return { deny: 'Request cancelled.' }
       return fail($, run, 'history', 'The conversation history could not be read. Start a new conversation.')

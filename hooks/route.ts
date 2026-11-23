@@ -81,6 +81,14 @@ export function wholeRequest(before: Body, request: Body, reply: Message | undef
   return { ...request, system: before.system, tools: request.tools ?? before.tools, thread: undefined, messages: [...(before.messages ?? []), ...replied, ...added] }
 }
 
+export function toolResultsMatch(reply: Message, added: Message[]): boolean {
+  const calls = Array.isArray(reply.content) ? reply.content.filter(block => block.type === 'tool_use').map(block => block.id) : []
+  const results = added.flatMap(message => message.role === 'user' && Array.isArray(message.content)
+    ? message.content.filter(block => block.type === 'tool_result') : [])
+  const pending = new Set(calls)
+  return calls.length === results.length && results.every(block => typeof block.tool_use_id === 'string' && pending.delete(block.tool_use_id))
+}
+
 // Workflow agents publish the assistant reply one row at a time. Pair its
 // tool calls with this continuation before attaching it to the saved request.
 export function workflowContinuation(before: Body | undefined, rows: (Block[] | undefined)[], request: Body): Body | undefined {
@@ -88,15 +96,9 @@ export function workflowContinuation(before: Body | undefined, rows: (Block[] | 
   if (!before?.messages?.length || rows.includes(undefined) || added[0]?.role !== 'user' ||
       added.some(message => message.role !== 'user' && message.role !== 'system')) return undefined
 
-  const content = rows.flatMap(row => row ?? [])
-  if (!content.length) return undefined
-  const calls = content.filter(block => block.type === 'tool_use').map(block => block.id)
-  const results = added.flatMap(message => message.role === 'user' && Array.isArray(message.content)
-    ? message.content.filter(block => block.type === 'tool_result') : [])
-  const pending = new Set(calls)
-  if (calls.length !== results.length) return undefined
-  if (results.some(block => typeof block.tool_use_id !== 'string' || !pending.delete(block.tool_use_id))) return undefined
-  return wholeRequest(before, request, { role: 'assistant', content })
+  const reply = { role: 'assistant', content: rows.flatMap(row => row ?? []) }
+  if (!reply.content.length || !toolResultsMatch(reply, added)) return undefined
+  return wholeRequest(before, request, reply)
 }
 
 export function toOllamaBody(body: Body, model: string, thinking?: Thinking): string {
