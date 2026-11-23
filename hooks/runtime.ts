@@ -53,11 +53,15 @@ export async function getPreferences($: EngineInterface): Promise<Preferences> {
 }
 
 function forSession(current: ViewState, owner: string): ViewState {
+  // A previous version could leave its automatic /model failure in the saved view.
+  if (current.notice === 'The model switch did not finish. Choose a model with /model or select the use setting again to retry.') {
+    current = { ...current, notice: '' }
+  }
   if (current.owner === owner) return current
   // Adopt an older activation's view once. A different chat always starts
   // compact, without an editor or notice left open by the previous chat.
   return { ...current, owner, ...(current.owner === undefined ? {} : {
-    settingsOpen: false, openMenu: null, notice: '', modelWindow: undefined, selection: undefined,
+    settingsOpen: false, openMenu: null, notice: '', modelWindow: undefined,
   }) }
 }
 

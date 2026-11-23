@@ -23,7 +23,7 @@ New installs start with **Subagents** enabled. Claude Code opens with your usual
 2. Use the mode selector above the prompt to choose **Full** for Ollama in the conversation and subagents, or **Subagents** to keep Claude in the conversation.
 3. Choose one Ollama model for the chat and its subagents. Select **Off** whenever you want Claude for both roles.
 
-In Claude Desktop, the Ollama controls choose the model for each turn independently of Claude's built-in model picker. The Ollama bar shows the conversation model when Ollama is enabled. In **Subagents**, it can read Claude's initial effort from the current Desktop chat's saved selection before the first request. With **Off** selected, Claude's own status line shows the model and effort.
+The mod applies your Ollama model and effort when it sends a request to Ollama. Claude Code keeps the model selected for the chat or subagent and uses that selection for its own usage reports and context window. You can change the session model with Claude's built-in `/model` picker. The Ollama bar shows the conversation model when Ollama is enabled. In **Subagents**, it can read Claude's initial effort from the current Desktop chat's saved selection before the first request. With **Off** selected, Claude's own status line shows the model and effort.
 
 | Setting | Conversation | Subagents |
 |---|---|---|
@@ -33,7 +33,7 @@ In Claude Desktop, the Ollama controls choose the model for each turn independen
 
 New chats inherit your last saved setup. Selecting **Off** keeps the Ollama model and the previously selected mode. The model picker includes local models and available Ollama cloud models. Type to search.
 
-Settings shows the model and its supported effort options. Open **Advanced** for context length, the Ollama address, and request usage. Select the X to close settings and return to the compact status and worker activity. The compact mode button stays available after the first message. Errors remain visible when settings are closed; a failed model switch includes **Retry**. Workers show **Starting…** until their first response confirms the model.
+Settings shows the model and its supported effort options. Open **Advanced** for context length, the Ollama address, and request usage. Select the X to close settings and return to the compact status and worker activity. The compact mode button stays available after the first message. Errors remain visible when settings are closed. Workers show **Starting…** until their first response confirms the model.
 
 The context length picker selects the running allocation or the configured default. **(Default)** marks a verified default from the model or the local Ollama app. Selecting the running allocation or the marked default clears the plugin's saved limit. If the model is running with a larger allocation, you can select its configured size as an explicit limit. **Auto** appears when Ollama hasn't reported a size.
 

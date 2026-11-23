@@ -6,8 +6,7 @@ import { invalidateStaleConnection } from './discovery'
 import type { Connection } from './ollama'
 import { toOllamaBody, toolResultsMatch, wholeRequest, withoutUnsignedThinking, workflowContinuation } from './route'
 import { captureWindow, releaseWindow } from './window'
-import { isOllamaModel, rememberNativeModel, resolveNativeModel } from './models'
-import { cancelInferenceSelection } from './selection'
+import { isOllamaModel } from './models'
 import { activityTime, recordOllamaUsage, startAgentActivity, startMainActivity, updateAgentActivity, updateMainActivity } from './activity'
 
 type Body = Parameters<typeof toOllamaBody>[0]
@@ -17,14 +16,13 @@ type Run = {
   connection?: Connection
   model: string
   effort?: Thinking
-  nativeModel: string
+  stepModel: string
   failed: boolean
   failure?: string
   noticeRevision?: number
   previousNotice?: string
   previousConnectionIssue?: string
   worker?: boolean
-  captured: boolean
   accepted: boolean
   lastRequest?: Body
   workflowReply?: Parameters<typeof workflowContinuation>[1]
@@ -78,7 +76,7 @@ async function fail($: EngineInterface, run: Run, phase: string, reason: string,
         await updateView($, current => {
           if (current.owner !== owner || (noticeRevisions.get(owner) ?? 0) !== run.noticeRevision ||
               current.notice !== run.previousNotice || !current.preferences.enabled || (!run.worker && current.preferences.mode !== 'full') ||
-              current.preferences.model !== run.model || current.preferences[effort] !== run.effort || current.selection?.status === 'pending') return current
+              current.preferences.model !== run.model || current.preferences[effort] !== run.effort) return current
           if (phase === 'connection') {
             if (!run.connection) return { ...current, notice: detail }
             if (current.endpoint && current.endpoint !== run.connection.base) return current
@@ -153,10 +151,9 @@ async function forwardNative($: EngineInterface, run: Run, loop: string, e: Para
   return result
 }
 
-async function snapshot($: EngineInterface, nativeModel: string, worker: boolean): Promise<Run> {
+async function snapshot($: EngineInterface, stepModel: string, worker: boolean): Promise<Run> {
   const sessionId = await $.session.id()
   const preferences = await getPreferences($)
-  nativeModel = await resolveNativeModel($, nativeModel)
   // A /clear during the store read must not pair one chat's settings with
   // another chat's history. Stop this step if the owner changed.
   if (sessionId !== await $.session.id()) throw new Error('Chat changed while capturing the run.')
@@ -164,7 +161,7 @@ async function snapshot($: EngineInterface, nativeModel: string, worker: boolean
   const model = enabled ? preferences.model : ''
   const effort = worker ? preferences.subagentEffort : preferences.fullEffort
   const view = await readView($).catch(() => undefined)
-  const run: Run = { sessionId, nativeModel, model, effort, failed: false, captured: false, accepted: false, worker, previousNotice: view?.notice,
+  const run: Run = { sessionId, stepModel, model, effort, failed: false, accepted: false, worker, previousNotice: view?.notice,
     previousConnectionIssue: view?.connectionIssue, noticeRevision: noticeRevisions.get(sessionId) ?? 0 }
   if (model) {
     try {
@@ -181,17 +178,9 @@ export async function executionSpawn($: Parameters<Hook<'agent.spawn'>>[0], e: P
   // An active worker keeps its snapshot. A completed worker's next invocation
   // captures settings again, even when the host reuses its agent id.
   if (e.resume && agents.has(e.resume.agentId)) return next(e)
-  // Keep the native spawn and its tools, permissions and transcript. Inherited
-  // model names must refer to the parent's original native model, not our step
-  // override. Explicit Agent model selections remain the native baseline.
-  const parent = e.parentAgentId ? agents.get(e.parentAgentId) : inFlight.get(MAIN)
-  const nativeModel = e.model ?? parent?.nativeModel ?? e.parentModel
-  const run = await snapshot($, nativeModel, true)
-  // Agent tools dispatch after the parent step finishes, when inFlight may
-  // already be empty. Never inherit an Ollama picker selection as the native
-  // startup model; the worker's own steps apply its selected Ollama model.
+  const run = await snapshot($, e.model ?? e.parentModel, true)
   let started: Awaited<ReturnType<typeof next>>
-  try { started = await next(!e.resume && e.model === undefined && run ? { ...e, model: run.nativeModel } : e) }
+  try { started = await next(e) }
   catch (error) {
     if (run) await releaseWindow($, run).catch(() => undefined)
     throw error
@@ -233,9 +222,6 @@ async function* observeFirstOutput(stream: ReturnType<Parameters<Hook<'turn.step
 }
 
 export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Parameters<Hook<'turn.step'>>[1], next: Parameters<Hook<'turn.step'>>[2]) {
-  // A queued native /model command produces its own host result. Cancel it
-  // before inference so that result cannot replace this turn's error/output.
-  if (!e.agentId) cancelInferenceSelection($)
   const loop = e.agentId ?? MAIN
   let run = e.agentId ? agents.get(e.agentId) : turns.get(e.turnId)
   if (!run && !e.agentId) {
@@ -245,22 +231,10 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
     if (run) turns.set(e.turnId, run)
   }
   if (!run) return yield* next(e)
-  // The host resolves aliases and explicit /model changes before our override.
-  if (!run.captured) {
-    run.nativeModel = await resolveNativeModel($, e.model).catch(() => run.nativeModel)
-    run.captured = true
-    if (!e.agentId && e.model === run.nativeModel && e.model !== 'default') {
-      await rememberNativeModel($, e.model).catch(() => undefined)
-    }
-  }
+  // A fallback can change the host's model between steps of the same turn.
+  run.stepModel = e.model
   const routed = Boolean(run.model)
-  // Native steps may select a fallback of their own. Only replace an Ollama
-  // selection; Off and the native main chat must respect the host's choice.
-  if (!routed && e.model !== run.nativeModel && e.model !== run.model && !await isOllamaModel($, e.model).catch(() => true)) {
-    run.nativeModel = e.model
-  }
-  const model = routed ? run.model : run.nativeModel
-  const effort = routed && run.effort !== 'on' && run.effort !== 'off' ? run.effort : undefined
+  const model = run.model || e.model
   run.accepted = false
   inFlight.set(loop, run)
   const activityRun = run
@@ -273,7 +247,7 @@ export async function* executionStep($: Parameters<Hook<'turn.step'>>[0], e: Par
   try {
     // No catch/retry around this stream: an error after delivery may follow a
     // tool call. Retrying here could execute it twice.
-    const stream = next({ ...e, model, ...(effort ? { effort } : {}) })
+    const stream = next(e)
     const result = e.agentId ? yield* stream : yield* observeFirstOutput(stream, () => { firstOutput = activityTime($) })
     delivered = true
     const ended = firstOutput && await activityTime($)
@@ -335,7 +309,7 @@ export async function executionComplete($: Parameters<Hook<'turn.complete'>>[0],
           const reply = Array.isArray(rows) ? rows.at(-1) : undefined
           if (reply?.role === 'assistant') entry.replyUuid = reply.uuid
         }
-        await updateMainActivity($, run.sessionId, { model: run.actualModel ?? (run.model || run.nativeModel), target: run.model, effort: run.activityEffort, tokens: run.output ?? 0, ...(run.duration ? { tokensPerSecond: (run.measuredOutput ?? 0) * 1000 / run.duration } : {}), running: false })
+        await updateMainActivity($, run.sessionId, { model: run.actualModel ?? (run.model || run.stepModel), target: run.model, effort: run.activityEffort, tokens: run.output ?? 0, ...(run.duration ? { tokensPerSecond: (run.measuredOutput ?? 0) * 1000 / run.duration } : {}), running: false })
         await releaseWindow($, run).catch(() => undefined)
       }
       turns.delete(e.turnId)
@@ -349,9 +323,10 @@ function header(headers: Record<string, string> | undefined, name: string): stri
   return Object.entries(headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1] ?? ''
 }
 
-function nativeBody(body: Body, model: string): string {
-  const native = { ...body, model }
-  return withoutUnsignedThinking(native) ?? JSON.stringify(native)
+function matchesStepModel(model: string | undefined, step: string): boolean {
+  if (!model) return false
+  // The engine can resolve its default and strip the context suffix on the wire.
+  return step === 'default' || model.replace(/\[1m\]$/i, '') === step.replace(/\[1m\]$/i, '')
 }
 
 export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Parameters<Hook<'http.fetch'>>[1], next: Parameters<Hook<'http.fetch'>>[2]) {
@@ -381,17 +356,9 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
   const firstPartyClass = header(e.init?.headers, 'x-claude-1p-request-class')
   const markedAuxiliary = beta.includes('auto-mode-classifier') || beta.includes('claude-code-side-query') ||
     requestClass === 'auxiliary' || firstPartyClass === 'followup-generation' || firstPartyClass === 'summary-extraction'
-  // Native side requests can outlive the step, and may inherit an Ollama
-  // picker selection even while Off. They always stay on the native client.
+  // Native side requests keep the model the host chose, even after the step ends.
   if (markedAuxiliary) {
     if (body.model === 'default') return { deny: CHOOSE_NATIVE }
-    try {
-      if (body.model && await isOllamaModel($, body.model)) {
-        const nativeModel = run?.nativeModel ?? await resolveNativeModel($, body.model)
-        if (nativeModel === 'default') return { deny: CHOOSE_NATIVE }
-        return next({ ...e, init: { ...e.init, body: nativeBody(body, nativeModel) } })
-      }
-    } catch { /* Keep the requested model if classification is unavailable. */ }
     const cleaned = withoutUnsignedThinking(body)
     return next(cleaned ? { ...e, init: { ...e.init, body: cleaned } } : e)
   }
@@ -417,20 +384,18 @@ export async function executionFetch($: Parameters<Hook<'http.fetch'>>[0], e: Pa
     ? { deny: run.failure! }
     : { deny: 'The Ollama response was interrupted; this request cannot be replayed. Change model with /model or start a new turn.' }
   if (!run.model) {
-    if (body.model !== run.nativeModel || auxiliary || !knownConversation) return next(e)
+    if (!matchesStepModel(body.model, run.stepModel) || auxiliary || !knownConversation) return next(e)
     const cleaned = withoutUnsignedThinking(body)
     const request = cleaned ? { ...e, init: { ...e.init, body: cleaned } } : e
     return forwardNative($, run, loop, request, next, body)
   }
   if (auxiliary || !knownConversation) {
-    // Auxiliary calls keep their native destination. Restore an inherited
-    // Ollama model name and remove unsigned thinking the native API rejects.
-    const cleaned = body.model === run.model ? nativeBody(body, run.nativeModel) : withoutUnsignedThinking(body)
+    const cleaned = withoutUnsignedThinking(body)
     const request = cleaned ? { ...e, init: { ...e.init, body: cleaned } } : e
     return next(request)
   }
-  if (body.model !== run.model) {
-    return fail($, run, 'routing', 'The conversation request did not match the selected Ollama model.')
+  if (!matchesStepModel(body.model, run.stepModel)) {
+    return fail($, run, 'routing', 'The conversation request did not match the active Claude Code step.')
   }
   if (next.signal.aborted) return { deny: 'Request cancelled.' }
   if (!run.connection) return fail($, run, 'connection', INVALID_CONNECTION)

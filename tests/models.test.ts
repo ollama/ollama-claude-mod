@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { ClassicHookInputs, EngineInterface, Settings } from 'claude-code'
-import { isOllamaModel, modelSwitched, refreshModelCatalog, rememberNativeModel, resolveNativeModel } from '../hooks/models'
+import { isOllamaModel, modelSwitched, refreshModelCatalog } from '../hooks/models'
 import { DEFAULT_PREFERENCES, loadPreferences, savePreference } from '../hooks/settings'
 import type { OllamaModel, Preferences } from '../types'
 
@@ -56,7 +56,7 @@ test('partial discovery retains model identity until a complete catalog replaces
 test('native picker selection enables Full; Claude preserves active Subagents and publishes it', async () => {
   const f = fixture()
   expect(await apply(f, switched('claude-opus-4-8', 'local-model'))).toMatchObject({ enabled: true, mode: 'full', model: 'local-model' })
-  expect(await resolveNativeModel(f.engine, 'local-model')).toBe('claude-opus-4-8')
+  expect(f.values.has('native-model-v1:last')).toBe(false)
   await savePreference(f.engine, 'model-chat', 'mode', 'subagent')
   expect(await apply(f, switched('local-model', 'claude-sonnet-4-6'))).toMatchObject({ enabled: true, mode: 'subagent' })
   expect(f.values.get('preference-defaults-v1')).toMatchObject({ value: { enabled: true, mode: 'subagent' } })
@@ -64,30 +64,10 @@ test('native picker selection enables Full; Claude preserves active Subagents an
   expect(await apply(f, switched('local-model', 'claude-sonnet-4-6'))).toMatchObject({ enabled: false, mode: 'full' })
 })
 
-test('worker resolution and startup of an older chat cannot replace the main fallback', async () => {
-  const f = fixture()
-  await rememberNativeModel(f.engine, 'claude-opus-4-8')
-  expect(await resolveNativeModel(f.engine, 'claude-haiku-4-5')).toBe('claude-haiku-4-5')
-  expect(await resolveNativeModel(f.engine, 'local-model')).toBe('claude-opus-4-8')
-  f.move('older-chat')
-  await loadPreferences(f.engine, 'older-chat', { ...DEFAULT_PREFERENCES, model: 'local-model' })
-  await rememberNativeModel(f.engine, 'claude-sonnet-4-6')
-  f.move('new-chat')
-  await loadPreferences(f.engine, 'new-chat', { ...DEFAULT_PREFERENCES, model: 'local-model' })
-  expect(await resolveNativeModel(f.engine, 'local-model')).toBe('claude-opus-4-8')
-  expect(await isOllamaModel(f.engine, 'local-model')).toBe(true)
-})
-
-test('a saved bare Ollama tag cannot become the Claude target when leaving full mode', async () => {
+test('the saved catalog identifies a bare local tag separately from its cloud variant', async () => {
   const f = fixture({ ...DEFAULT_PREFERENCES, mode: 'subagent' })
   f.values.set('model-catalog-v1', [{ ...rows[0], model: 'inkling-2-mini:latest' }])
-  f.values.set('native-model-v1:model-chat', 'inkling-2-mini')
-  f.values.set('native-model-v1:last', 'claude-opus-5-5')
-  expect(await resolveNativeModel(f.engine, DEFAULT_PREFERENCES.model)).toBe('claude-opus-5-5')
-  await rememberNativeModel(f.engine, 'inkling-2-mini', true)
-  expect(f.values.get('native-model-v1:last')).toBe('claude-opus-5-5')
-  f.values.set('native-model-v1:last', 'inkling-2-mini:latest')
-  expect(await resolveNativeModel(f.engine, DEFAULT_PREFERENCES.model)).toBe('default')
+  expect(await isOllamaModel(f.engine, 'inkling-2-mini')).toBe(true)
   expect(await isOllamaModel(f.engine, 'inkling-2-mini:cloud')).toBe(false)
 })
 
@@ -103,16 +83,16 @@ test('automatic and resume switches leave preference defaults unchanged', async 
 
 test('a delayed model switch cannot publish into a newly resumed chat', async () => {
   const f = fixture()
-  const originalRead = f.engine.settings.read
+  const originalModel = f.engine.session.model
   let release!: () => void
   let waiting!: () => void
   const reached = new Promise<void>(resolve => { waiting = resolve })
   const paused = new Promise<void>(resolve => { release = resolve })
   let first = true
-  f.engine.settings.read = (async (args?: { source?: 'user' | 'flag' | 'policy' | 'project' | 'local' }) => {
+  f.engine.session.model = async () => {
     if (first) { first = false; waiting(); await paused }
-    return originalRead(args)
-  }) as typeof originalRead
+    return originalModel()
+  }
   const changing = apply(f, switched('claude-opus-4-8', 'local-model'))
   await reached
   f.move('resumed-chat')

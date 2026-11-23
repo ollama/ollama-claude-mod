@@ -6,8 +6,7 @@ import { loadModels, syncNativePicker } from './discovery'
 import { copyChatPreferences, getPreferences, notice, preferenceOwner, readView, rememberClear, updateView } from './runtime'
 import { modeLabels, renderUI } from './ui'
 import { executionComplete, executionFetch, executionSpawn, executionStep, recordWorkflowResponse } from './execution'
-import { isCurrentMainSwitch, modelSwitched, preserveNativeStartup, refreshModelCatalog, rememberNativeModel } from './models'
-import { cancelSelection, confirmSelection, isOwnSelection, scheduleSelection, selectModel } from './selection'
+import { isCurrentMainSwitch, modelSwitched, refreshModelCatalog } from './models'
 import { refreshConfiguredWindow, resetWindows, saveModelWindow } from './window'
 import { composeRoutingContext, submitRoutingContext, refreshQueuedRoutingContext } from './context'
 import { clearFinishedAgents, readActivity, resetActivity, toggleActivity } from './activity'
@@ -64,7 +63,6 @@ async function persist($: EngineInterface, patch: Partial<Preferences>, owner?: 
     const preferences = await savePreferences($, savedOwner, patch)
     if (await $.session.id() === sessionId) {
       await updateView($, current => ({ ...current, preferences, notice: '' }))
-      scheduleSelection($, sessionId)
       void refreshConfiguredWindow($).catch(() => undefined)
     }
   } catch (error) {
@@ -109,9 +107,6 @@ export const register: Register = on => {
     await refreshAppearance($).catch(() => undefined)
     await $.command.register({ name: 'ollama', description: 'Configure Ollama for this chat', argumentHint: '[model [MODEL] | full | subagent | off | status | uninstall]', immediate: true })
     await refresh($).catch(() => undefined)
-    await rememberNativeModel($, await $.session.model()).catch(() => undefined)
-    await preserveNativeStartup($).catch(() => undefined)
-    scheduleSelection($, await $.session.id())
     return started
   })
 
@@ -123,7 +118,6 @@ export const register: Register = on => {
       await resetActivity($, await $.session.id()).catch(() => undefined)
       await refreshAppearance($).catch(() => undefined)
       await refresh($).catch(() => undefined)
-      scheduleSelection($, await $.session.id())
     }
     return result
   })
@@ -134,38 +128,23 @@ export const register: Register = on => {
     await refreshAppearance($).catch(() => undefined)
     return result
   })
-  on('classic.PreModelSwitch', confirmSelection)
   on('classic.PostModelSwitch', async ($, e, next) => {
     const owner = e.session_id
     const result = await next(e)
-    if (!await isCurrentMainSwitch($, e)) return result
-    if (isOwnSelection(e)) {
-      await rememberNativeModel($, e.to_model).catch(() => undefined)
-      await refreshConfiguredWindow($).catch(() => undefined)
-      await preserveNativeStartup($).catch(() => undefined)
-      return result
-    }
-    if (!['command', 'picker', 'sdk'].includes(e.source)) {
-      scheduleSelection($, owner, true)
-      return result
-    }
-    cancelSelection()
+    if (!['command', 'picker', 'sdk'].includes(e.source) || !await isCurrentMainSwitch($, e)) return result
     preferenceRevision++
     try {
       const preferences = await modelSwitched($, e)
-      if (preferences && await $.session.id() === owner) await updateView($, current => ({ ...current, preferences, selection: undefined, notice: '' }))
+      if (preferences && await $.session.id() === owner) await updateView($, current => ({ ...current, preferences, notice: '' }))
     } catch (error) {
       const preferences = await getPreferences($).catch(() => undefined)
       if (await $.session.id() === owner) await updateView($, current => ({ ...current, ...(preferences ? { preferences } : {}), notice: message(error) }))
     }
     await refreshConfiguredWindow($).catch(() => undefined)
-    await preserveNativeStartup($).catch(() => undefined)
     return result
   })
 
-
   on('session.end', async ($, e, next) => {
-    cancelSelection()
     stopPulse()
     if (e.reason === 'clear') rememberClear(e.sessionId)
     await resetWindows($).catch(() => undefined)
@@ -174,7 +153,6 @@ export const register: Register = on => {
 
   on('command.run', async ($, e, next) => {
     if (!['clear', 'new', 'reset', 'branch', 'resume'].includes(e.command)) return next(e)
-    cancelSelection()
     preferenceRevision++
     refreshVersion++
     const before = await $.session.id()
@@ -186,14 +164,13 @@ export const register: Register = on => {
       const preferences = await getPreferences($)
       await updateView($, current => ({ ...current, preferences, notice: '' }))
       if (after !== refreshedSession) await refresh($)
-      scheduleSelection($, after)
     } catch (error) { await notice($, message(error)).catch(() => undefined) }
     return result
   })
 
   on('command.run', { command: 'model' }, async ($, e, next) => {
     if (!e.args.trim()) await refresh($, false, true).catch(() => undefined)
-    return selectModel($, e, next)
+    return next(e)
   })
 
   on('command.run', { command: 'ollama' }, async ($, e) => {

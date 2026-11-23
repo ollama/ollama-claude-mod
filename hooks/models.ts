@@ -9,7 +9,6 @@ import { getConnection } from './ollama'
 
 const CATALOG_FIELD = 'ollama.modelCatalog'
 const CATALOG_STORE = 'model-catalog-v1'
-const NATIVE_GLOBAL = 'native-model-v1:last'
 
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -101,61 +100,19 @@ export async function isOllamaModel($: EngineInterface, candidate: string): Prom
   catch { return false } // Optional cached identity must not break native routing.
 }
 
-// Keep the actual native model separately from the picker selection. A model
-// chosen from Ollama's rows must never become its own failure fallback.
-export async function resolveNativeModel($: EngineInterface, candidate: string): Promise<string> {
-  const owner = await preferenceOwner($, await $.session.id())
-  const key = `native-model-v1:${encodeURIComponent(owner)}`
-  if (candidate && !await isOllamaModel($, candidate)) return candidate
-  for (const saved of [await $.store.get(key), await $.store.get(NATIVE_GLOBAL)]) {
-    if (typeof saved === 'string' && saved && !await isOllamaModel($, saved)) return saved
-  }
-  return 'default'
-}
-
-export async function rememberNativeModel($: EngineInterface, candidate: string, publish = false, rawSessionId?: string): Promise<void> {
-  const sessionId = rawSessionId ?? await $.session.id()
-  if (sessionId !== await $.session.id()) return
-  if (!candidate || await isOllamaModel($, candidate)) return
-  const owner = await preferenceOwner($, sessionId)
-  if (sessionId !== await $.session.id()) return
-  await $.store.set(`native-model-v1:${encodeURIComponent(owner)}`, candidate)
-  if (sessionId !== await $.session.id()) return
-  const shouldPublish = publish || await $.store.get(NATIVE_GLOBAL) === undefined
-  if (shouldPublish && sessionId === await $.session.id()) await $.store.set(NATIVE_GLOBAL, candidate)
-}
-
-export async function preserveNativeStartup($: EngineInterface): Promise<void> {
-  const current = await $.session.model()
-  if (!await isOllamaModel($, current)) return
-  const native = await resolveNativeModel($, current)
-  const result = await $.process.run(['node', `${$.plugin.root}/scripts/model-picker.mjs`, 'startup', '--native-model', native, '--catalog-stdin'], {
-    stdin: JSON.stringify({ models: [{ name: current, isCloud: current.endsWith(':cloud'), isDecision: false }], complete: false }),
-    timeoutMs: 10000,
-  })
-  if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'Could not preserve the startup model.')
-}
-
 export async function isCurrentMainSwitch($: EngineInterface, e: ClassicHookInputs['PostModelSwitch']): Promise<boolean> {
   return !e.agent_id && e.session_id === await $.session.id() && e.to_model === await $.session.model()
 }
 
 export async function modelSwitched($: EngineInterface, e: ClassicHookInputs['PostModelSwitch']): Promise<Preferences | undefined> {
-  if (!await isCurrentMainSwitch($, e)) return undefined
+  if (!['command', 'picker', 'sdk'].includes(e.source) || !await isCurrentMainSwitch($, e)) return undefined
   const sessionId = e.session_id
   const owner = await preferenceOwner($, sessionId)
-  const explicit = ['command', 'picker', 'sdk'].includes(e.source)
-  await rememberNativeModel($, e.from_model, explicit, sessionId)
   const selected = e.requested_model ?? e.to_model
-  const ollama = await isOllamaModel($, selected) || await isOllamaModel($, e.to_model)
-  if (!await isCurrentMainSwitch($, e)) return undefined
-  if (!ollama) await rememberNativeModel($, e.to_model, explicit, sessionId)
-  if (!explicit) return undefined
+  const ollama = await isOllamaModel($, selected) ? selected : await isOllamaModel($, e.to_model) ? e.to_model : undefined
   if (!await isCurrentMainSwitch($, e)) return undefined
   if (ollama) {
-    const name = await isOllamaModel($, selected) ? selected : e.to_model
-    if (!await isCurrentMainSwitch($, e)) return undefined
-    return savePreferences($, owner, { model: name, mode: 'full', enabled: true })
+    return savePreferences($, owner, { model: ollama, mode: 'full', enabled: true })
   }
   const preferences = await getPreferences($)
   if (!await isCurrentMainSwitch($, e)) return undefined
