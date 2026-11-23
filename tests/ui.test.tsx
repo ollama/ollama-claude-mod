@@ -875,17 +875,35 @@ for (const surface of ['desktop', 'terminal'] as const) {
   })
 }
 
-test('/ollama uses the same model setting in both modes and preserves it when Off', async ($, on) => {
+test('/ollama model selects one model independently of routing', async ($, on) => {
   const fixture = setup(on)
   const command = (args: string) => $.command.run({ command: 'ollama', args } as Parameters<typeof $.command.run>[0])
-  expect((await command('subagent second')).text).toBe('Ollama · Subagents · second')
-  expect((await command('full')).text).toBe('Ollama · Full · second')
+  for (const mode of ['full', 'subagent']) {
+    const rejected = await command(`${mode} second`)
+    expect(rejected.exitCode).toBe(1)
+    expect(rejected.text).toContain('/ollama model MODEL')
+  }
+  expect(fixture.writes).toEqual([])
+  expect((await command('status')).text).toBe('Ollama · Full · first')
   await command('off')
+  expect((await command('model second')).text).toBe('Ollama model · second')
   expect(fixture.state().preferences).toEqual({ ...initial.preferences, model: 'second', enabled: false })
-  expect((await command('full first')).text).toBe('Ollama · Full · first')
-  await command('subagent')
+  expect((await command('subagent')).text).toBe('Ollama · Subagents · second')
+  await command('model first')
   expect((await command('status')).text).toBe('Ollama · Subagents · first')
-  expect(fixture.state().preferences).toEqual({ ...initial.preferences, mode: 'subagent' })
+  expect((await command('full')).text).toBe('Ollama · Full · first')
+})
+
+test('/ollama model opens the shared picker without changing the mode', async ($, on) => {
+  const fixture = setup(on, { ...initial, preferences: { ...initial.preferences, enabled: false } })
+  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'model-command', props })
+  const result = await $.command.run({ command: 'ollama', args: 'model' } as Parameters<typeof $.command.run>[0])
+  expect(result.text).toBe('')
+  expect(fixture.state().settingsOpen).toBe(true)
+  expect(await ui.find({ key: 'model-option-second' })).toBeDefined()
+  await ui.press({ key: 'model-option-second' })
+  expect(fixture.state().preferences).toEqual({ ...initial.preferences, model: 'second', enabled: false })
+  await ui.unmount()
 })
 
 test('Off keeps a failed switch visible without repeating the previous model', async ($, on) => {

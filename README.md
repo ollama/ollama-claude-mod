@@ -43,8 +43,9 @@ To show tokens per second in the status bar, set **Response speed** to **On** un
 
 ```text
 /ollama                   Open settings
-/ollama full MODEL        Set the Ollama model and enable Full
-/ollama subagent MODEL    Set the Ollama model and enable Subagents
+/ollama model [MODEL]     Open the model picker or set the shared Ollama model
+/ollama full              Enable Full with the selected Ollama model
+/ollama subagent          Enable Subagents with the selected Ollama model
 /ollama off               Select Off and keep the saved Ollama model
 /ollama status            Show the current setup
 ```

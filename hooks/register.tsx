@@ -107,7 +107,7 @@ export const register: Register = on => {
     const started = await next(e)
     await resetActivity($, await $.session.id()).catch(() => undefined)
     await refreshAppearance($).catch(() => undefined)
-    await $.command.register({ name: 'ollama', description: 'Configure Ollama for this chat', argumentHint: '[full MODEL | subagent MODEL | off | status | uninstall]', immediate: true })
+    await $.command.register({ name: 'ollama', description: 'Configure Ollama for this chat', argumentHint: '[model [MODEL] | full | subagent | off | status | uninstall]', immediate: true })
     await refresh($).catch(() => undefined)
     await rememberNativeModel($, await $.session.model()).catch(() => undefined)
     await preserveNativeStartup($).catch(() => undefined)
@@ -209,16 +209,20 @@ export const register: Register = on => {
         if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'Could not finish uninstalling Ollama. Try /ollama uninstall again.')
         return { text: result.stdout.trim(), isTextDisplayOnly: true }
       }
-      if (command === 'off' || command === 'never') await persist($, { enabled: false })
-      else if (command === 'full' || command === 'subagent') {
-        const selected = rest.join(' ')
-        await persist($, { mode: command, enabled: true, ...(selected ? { model: selected } : {}) })
-      } else if (command && command !== 'status') return { text: 'Use /ollama full MODEL, /ollama subagent MODEL, /ollama off, /ollama status, or /ollama uninstall.', isTextDisplayOnly: true }
-      else if (!command) {
-        await updateView($, current => ({ ...current, settingsOpen: true, openMenu: null }))
+      if (!command || (command === 'model' && !rest.length)) {
+        const openMenu = command === 'model' ? { key: 'model' as const } : null
+        await updateView($, current => ({ ...current, settingsOpen: true, openMenu }))
+        if (openMenu) void refresh($, false, true).catch(() => undefined)
         return { text: '', isTextDisplayOnly: true }
       }
+      if (command === 'model') await persist($, { model: rest.join(' ') })
+      else if (command === 'off' || command === 'never') await persist($, { enabled: false })
+      else if (command === 'full' || command === 'subagent') {
+        if (rest.length) throw new Error('Choose a model with /ollama model MODEL. Use /ollama full or /ollama subagent to switch modes.')
+        await persist($, { mode: command, enabled: true })
+      } else if (command !== 'status') return { text: 'Use /ollama model [MODEL], /ollama full, /ollama subagent, /ollama off, /ollama status, or /ollama uninstall.', isTextDisplayOnly: true }
       const preferences = await getPreferences($)
+      if (command === 'model') return { text: `Ollama model · ${preferences.model}`, isTextDisplayOnly: true }
       if (!preferences.enabled) return { text: 'Ollama off · Claude runs this chat and its subagents.', isTextDisplayOnly: true }
       return { text: `Ollama · ${modeLabels[preferences.mode]} · ${preferences.model}`, isTextDisplayOnly: true }
     } catch (error) { return { text: message(error), isTextDisplayOnly: true, exitCode: 1 } }
