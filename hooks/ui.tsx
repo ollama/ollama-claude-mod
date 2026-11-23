@@ -56,7 +56,6 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
   const closeIcon = isDesktop ? '✕' : '×'
   const settingsIcon = state.settingsOpen ? closeIcon : '⋯'
   const settingsName = state.settingsOpen ? 'Close Ollama settings' : 'Open Ollama settings'
-  const speedCheckbox = `${showResponseSpeed ? '☑' : '☐'} Show response speed (tok/s)`
   const menuKey = state.openMenu?.key
   const advanced = menuKey === 'advanced'
   const openRow = (menuKey === 'model' || isTerminal && (menuKey === 'compact-mode' || menuKey === 'effort')) ? menuKey : undefined
@@ -180,9 +179,9 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
               {state.connected ? <Text key="connection-status" dimColor>Connected</Text>
                 : <Button key="refresh" plain label="Refresh" onPress={actions.refresh} />}
             </Box>)}
-            {field('Status bar', () => <Button key="show-response-speed" plain
-              label={isDesktop ? speedCheckbox : `Show response speed, ${showResponseSpeed ? 'checked' : 'unchecked'}`}
-              onPress={() => actions.setShowResponseSpeed(!showResponseSpeed)}>{speedCheckbox}</Button>)}
+            {field('Response speed', label => <Select key="show-response-speed" label={label} value={showResponseSpeed ? 'on' : 'off'}
+              options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+              onSelect={value => actions.setShowResponseSpeed(value === 'on')} />)}
             {field('Ollama usage', () => <Text key="ollama-usage" dimColor wrap={isDesktop ? undefined : 'truncate-end'}>
               {isDesktop ? usageLabel : `Ollama · ${usageLabel}`}
             </Text>)}

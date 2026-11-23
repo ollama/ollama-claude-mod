@@ -139,7 +139,7 @@ test('desktop settings align field labels and stack them when space is limited',
   expect((await ui.find({ key: 'settings-panel' }))?.props.paddingTop).toBe('md')
   expect(await ui.find({ type: 'Text', text: 'Advanced' })).toBeUndefined()
   await ui.press({ key: 'advanced' })
-  const fields = ['Model', 'Effort', 'Context length', 'Ollama address', 'Status bar', 'Ollama usage']
+  const fields = ['Model', 'Effort', 'Context length', 'Ollama address', 'Response speed', 'Ollama usage']
   const rows = async () => (await ui.findAll({ type: 'Box' })).filter(row => fields.includes(row.key ?? ''))
   const wide = await rows()
   expect(wide.map(row => row.key)).toEqual(fields)
@@ -682,9 +682,9 @@ for (const surface of ['desktop', 'terminal'] as const) {
     await ui.press({ key: 'settings' })
     await ui.press({ key: 'advanced' })
     expect(await ui.find({ key: 'show-response-speed' })).toMatchObject({
-      text: '☐ Show response speed (tok/s)', props: { label: surface === 'desktop' ? '☐ Show response speed (tok/s)' : 'Show response speed, unchecked' },
+      type: 'Select', props: { value: 'off', options: [{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }] },
     })
-    await ui.press({ key: 'show-response-speed' })
+    await ui.select({ key: 'show-response-speed', value: 'on' })
     expect((await ui.find({ type: 'Text', text: '32 tok/s' }))?.text).toBe('32 tok/s')
     expect(fixture.writes).toEqual(['show-response-speed'])
     await ui.press({ key: 'settings' })
@@ -694,12 +694,10 @@ for (const surface of ['desktop', 'terminal'] as const) {
     const next = await $.ui.mount({ ...site, requestId: 'another-chat' })
     await next.press({ key: 'settings' })
     await next.press({ key: 'advanced' })
-    expect(await next.find({ key: 'show-response-speed' })).toMatchObject({
-      text: '☑ Show response speed (tok/s)', props: { label: surface === 'desktop' ? '☑ Show response speed (tok/s)' : 'Show response speed, checked' },
-    })
+    expect((await next.find({ key: 'show-response-speed' }))?.props.value).toBe('on')
     const writesBeforeToggle = fixture.writes.length
-    await next.press({ key: 'show-response-speed' })
-    expect((await next.find({ key: 'show-response-speed' }))?.text).toBe('☐ Show response speed (tok/s)')
+    await next.select({ key: 'show-response-speed', value: 'off' })
+    expect((await next.find({ key: 'show-response-speed' }))?.props.value).toBe('off')
     expect(await next.find({ type: 'Text', text: '32 tok/s' })).toBeUndefined()
     expect(fixture.values.get('show-response-speed')).toBe(false)
     expect(fixture.writes.slice(writesBeforeToggle)).toEqual(['show-response-speed'])
