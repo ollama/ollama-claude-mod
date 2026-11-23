@@ -1,4 +1,4 @@
-import type { EngineInterface, RenderInput } from 'claude-code'
+import type { EngineInterface, RenderElement, RenderInput } from 'claude-code'
 import type { ActivityState, Mode, OpenMenu, SubagentActivity, Thinking, ViewState } from '../types'
 import { activityElements, displayName, setPulse, shownSubagents, tokenCount } from './activity-view'
 import { pickerMenu } from './menu'
@@ -20,6 +20,9 @@ export type UIActions = {
   setContext: (value: string) => Promise<void>
   refresh: () => Promise<void>
 }
+
+// Desktop measures box widths in character cells. This matches its 28 px control height.
+const settingsButtonColumns = 3.75
 
 const effortLabels: Record<Thinking, string> = {
   off: 'Off', on: 'On', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max',
@@ -49,15 +52,31 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
   const efforts = selected?.efforts ?? []
   const currentEffort = effort && efforts.includes(effort) ? effort : selected?.defaultEffort
   const isTerminal = e.surface === 'terminal'
-  const advanced = state.openMenu?.key === 'advanced'
-  const openRow = !advanced && (isTerminal || state.openMenu?.key === 'model') ? state.openMenu?.key : undefined
+  const isDesktop = e.surface === 'desktop'
+  const closeIcon = isDesktop ? '✕' : '×'
+  const settingsIcon = state.settingsOpen ? closeIcon : '⋯'
+  const settingsName = state.settingsOpen ? 'Close Ollama settings' : 'Open Ollama settings'
+  const speedCheckbox = `${showResponseSpeed ? '☑' : '☐'} Show response speed (tok/s)`
+  const menuKey = state.openMenu?.key
+  const advanced = menuKey === 'advanced'
+  const openRow = (menuKey === 'model' || isTerminal && (menuKey === 'compact-mode' || menuKey === 'effort')) ? menuKey : undefined
+  const stackedFields = e.props.bodyColumns < 52
+  const settingsGap = isDesktop ? 'sm' : isTerminal ? 0 : 0.5
+  const field = (label: string, control: (inlineLabel?: string) => RenderElement, expanded = false) => {
+    if (!isDesktop) return control(label)
+    return <Box key={label} flexDirection={stackedFields ? 'column' : 'row'}
+      alignItems={stackedFields || expanded ? 'flex-start' : 'center'} columnGap="md" rowGap="xs">
+      <Box width={stackedFields ? undefined : 15} flexShrink={0}><Text dimColor>{label}</Text></Box>
+      <Box flexDirection="column" alignItems="flex-start" width={stackedFields ? '100%' : undefined} minWidth={0} flexShrink={1}>
+        {control()}
+      </Box>
+    </Box>
+  }
   const picker = (menu: Menu) => isTerminal || menu.searchable
     ? pickerMenu($, e, state.openMenu, menu, actions.setOpenMenu)
     : <Select key={menu.key} label={menu.label} value={menu.value} options={menu.options} onSelect={menu.onSelect} />
   const window = state.modelWindow?.model === model && state.modelWindow.endpoint === state.endpoint ? state.modelWindow : undefined
   const contextValue = window?.effective ? String(window.effective) : ''
-  const usagePicker = (key: string, label = '') => picker({ key, label, value: preferences.enabled ? preferences.mode : 'never',
-    options: modeOptions, onSelect: value => actions.setMode(value as Mode | 'never') })
   const target = state.selection?.current ?? (preferences.enabled && preferences.mode === 'full' ? preferences.full : '')
   const native = !target
   // A late response belongs to its captured target. Never present it as the
@@ -74,12 +93,10 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
   const notice = state.notice || (preferences.enabled || state.settingsOpen ? state.connectionIssue : undefined)
   const rows = preferences.enabled ? state.activity?.subagents ?? [] : []
   const hidden = state.activity?.hidden ?? false
-  const showRows = !hidden && !state.settingsOpen
-  const shown = showRows ? shownSubagents(rows, Math.max(1, Math.min(5, e.props.maxRows - 2))) : []
-  const remaining = showRows && shown.length < rows.length ? rows.filter(row => !shown.includes(row)) : []
+  const shown = hidden ? [] : shownSubagents(rows, Math.max(1, Math.min(5, e.props.maxRows - 2)))
+  const remaining = !hidden && shown.length < rows.length ? rows.filter(row => !shown.includes(row)) : []
   const usage = state.activity?.ollama ?? { requests: 0, inputTokens: 0, outputTokens: 0 }
   const usageLabel = [
-    'Ollama',
     `${usage.requests.toLocaleString('en-US')} ${usage.requests === 1 ? 'request' : 'requests'}`,
     ...(usage.inputTokens !== undefined ? [`${usage.inputTokens.toLocaleString('en-US')} input tokens`] : []),
     ...(usage.outputTokens !== undefined ? [`${usage.outputTokens.toLocaleString('en-US')} output tokens`] : []),
@@ -93,18 +110,30 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
       <Box key="summary" flexDirection="row" alignItems="center" flexWrap="wrap" columnGap={1}>
         <Box flexDirection="row" alignItems="center" flexWrap="wrap" columnGap={1} flexGrow={1} flexShrink={1} minWidth={0}>
           {summary ? <Text key="summary-status" weight="bold" color={isClaude ? 'claude' : undefined} wrap="truncate-end">{summary}</Text> : null}
-          {!state.settingsOpen && rows.length > 0 ? <Button key="subagents-toggle" plain dimColor
+          {rows.length > 0 ? <Button key="subagents-toggle" plain dimColor
             label={`${rows.length} ${rows.length === 1 ? 'subagent' : 'subagents'} ${hidden ? '▾' : '▴'}`} onPress={actions.toggleSubagents} /> : null}
           {preferences.enabled && summaryEffort ? <Text key="summary-effort" dimColor wrap="truncate-end">{`· ${summaryEffort}`}</Text> : null}
           {showResponseSpeed && main?.tokensPerSecond !== undefined && Number.isFinite(main.tokensPerSecond)
             ? <Text key="summary-speed" dimColor tabular wrap="truncate-end">{`${summary ? '· ' : ''}${Math.round(main.tokensPerSecond * 10) / 10} tok/s`}</Text> : null}
         </Box>
-        {!state.settingsOpen ? usagePicker('compact-mode') : null}
+        {picker({ key: 'compact-mode', label: '', value: preferences.enabled ? preferences.mode : 'never',
+          options: modeOptions, onSelect: value => actions.setMode(value as Mode | 'never') })}
         {state.selection?.status === 'failed' ? <Button key="retry-switch" plain label="Retry" onPress={() => actions.setMode(preferences.enabled ? preferences.mode : 'never')} /> : null}
-        <Button key="settings" plain dimColor label={state.settingsOpen ? 'Close Ollama settings' : 'Open Ollama settings'}
-          role={state.settingsOpen ? 'dismiss' : undefined} onPress={actions.toggleSettings}>
-          {state.settingsOpen ? '×' : '⚙'}
-        </Button>
+        {isDesktop ? (
+          <Box key="settings-control" flexDirection="row" alignItems="center" columnGap={0} flexShrink={0}>
+            <Box width={settingsButtonColumns} flexShrink={0} alignItems="center" justifyContent="center">
+              <Text dimColor>{settingsIcon}</Text>
+            </Box>
+            {/* Desktop paints the button's rounded corners beyond the height of this row. */}
+            <Box width={settingsButtonColumns} marginLeft={-settingsButtonColumns} flexShrink={0} alignItems="stretch" overflow="visible">
+              <Button key="settings" plain dimColor label={`\u2003\u2003${settingsName}`} onPress={actions.toggleSettings} />
+            </Box>
+          </Box>
+        ) : (
+          <Button key="settings" plain dimColor label={settingsName} onPress={actions.toggleSettings}>
+            {settingsIcon}
+          </Button>
+        )}
       </Box>
       {notice ? <Text key="notice">{notice}</Text> : null}
       {shown.map(row => <Box key={`subagent-${row.id}`} flexDirection="row" alignItems="center" columnGap={2} paddingLeft={1}>
@@ -124,29 +153,34 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
         <Text dimColor>↳</Text><Text dimColor>{`+${remaining.length} ${remaining.every(row => !row.running && !row.failed) ? 'done' : 'more'}`}</Text>
       </Box> : null}
       {state.settingsOpen ? (
-        <Box key="settings-panel" flexDirection="column" rowGap={isTerminal ? 0 : 0.5}>
-          <Box key="controls" flexDirection="row" flexWrap="wrap" alignItems="flex-start" columnGap={2} rowGap={1}>
-            {usagePicker('mode', 'Mode')}
-          </Box>
-          {!openRow || openRow === 'model' ? picker({ key: 'model', label: 'Model', value: model, options, searchable: true, onSelect: actions.setModel }) : null}
-          {efforts.length > 0 && (!openRow || openRow === 'effort') ? picker({ key: 'effort', label: 'Effort', value: currentEffort ?? '',
+        <Box key="settings-panel" flexDirection="column" paddingTop={isDesktop ? 'md' : undefined} rowGap={settingsGap}>
+          {!openRow || openRow === 'model' ? field('Model', label => picker({ key: 'model', label, value: model,
+            options, searchable: true, onSelect: actions.setModel }), openRow === 'model') : null}
+          {efforts.length > 0 && (!openRow || openRow === 'effort') ? field('Effort', label => picker({ key: 'effort', label, value: currentEffort ?? '',
             options: efforts.map(value => ({ value, label: effortLabels[value] })),
-            onSelect: value => actions.setEffort(value === selected?.defaultEffort ? undefined : value as Thinking) }) : null}
-          {!openRow ? <Button key="advanced" plain dimColor label={`Advanced ${advanced ? '▾' : '▸'}`}
-            onPress={() => actions.setOpenMenu(advanced ? null : { key: 'advanced' })} /> : null}
-          {advanced ? <Box key="settings-details" flexDirection="column" rowGap={isTerminal ? 0 : 0.5}>
-            <Button key="show-response-speed" plain label={`Show response speed, ${showResponseSpeed ? 'checked' : 'unchecked'}`}
-              onPress={() => actions.setShowResponseSpeed(!showResponseSpeed)}>
-              {`${showResponseSpeed ? '☑' : '☐'} Show response speed (tok/s)`}
-            </Button>
-            {model ? <Input key={`context-${state.endpoint}-${model}`} label="Context length" value={contextValue} submitLabel={isTerminal ? '' : 'Save'}
-              onSubmit={value => value.trim() === contextValue ? undefined : actions.setContext(value)} /> : null}
-            <Text key="ollama-usage" dimColor wrap="truncate-end">{usageLabel}</Text>
-            <Box key="connection" flexDirection="row" alignItems="center" columnGap={1}>
-              <Input key="endpoint" label="Ollama address" value={state.endpoint} placeholder="http://localhost:11434" submitLabel={isTerminal ? '' : 'Save'} onSubmit={actions.setEndpoint} />
+            onSelect: value => actions.setEffort(value === selected?.defaultEffort ? undefined : value as Thinking) })) : null}
+          {!openRow ? (
+            // Offset Desktop's button padding to line the text up with the field labels.
+            <Box alignSelf="flex-start" marginLeft={isDesktop ? -1.25 : undefined}>
+              <Button key="advanced" plain dimColor label={advanced ? 'Advanced ▴' : 'Advanced ▾'}
+                onPress={() => actions.setOpenMenu(advanced ? null : { key: 'advanced' })} />
+            </Box>
+          ) : null}
+          {advanced ? <Box key="settings-details" flexDirection="column" rowGap={settingsGap}>
+            {model ? field('Context length', label => <Input key={`context-${state.endpoint}-${model}`} label={label} value={contextValue}
+              placeholder={isDesktop ? 'Context length' : undefined} submitLabel={isTerminal ? '' : 'Save'}
+              onSubmit={value => value.trim() === contextValue ? undefined : actions.setContext(value)} />) : null}
+            {field('Ollama address', label => <Box key="connection" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1}>
+              <Input key="endpoint" label={label} value={state.endpoint} placeholder="http://localhost:11434" submitLabel={isTerminal ? '' : 'Save'} onSubmit={actions.setEndpoint} />
               {state.connected ? <Text key="connection-status" dimColor>Connected</Text>
                 : <Button key="refresh" plain label="Refresh" onPress={actions.refresh} />}
-            </Box>
+            </Box>)}
+            {field('Status bar', () => <Button key="show-response-speed" plain
+              label={isDesktop ? speedCheckbox : `Show response speed, ${showResponseSpeed ? 'checked' : 'unchecked'}`}
+              onPress={() => actions.setShowResponseSpeed(!showResponseSpeed)}>{speedCheckbox}</Button>)}
+            {field('Ollama usage', () => <Text key="ollama-usage" dimColor wrap={isDesktop ? undefined : 'truncate-end'}>
+              {isDesktop ? usageLabel : `Ollama · ${usageLabel}`}
+            </Text>)}
           </Box> : null}
         </Box>
       ) : null}

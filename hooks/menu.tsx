@@ -3,7 +3,7 @@ import type { OpenMenu } from '../types'
 
 export type Menu = {
   key: string
-  label: string
+  label?: string
   value: string
   options: { value: string; label: string }[]
   searchable?: boolean
@@ -50,7 +50,7 @@ export function pickerMenu($: EngineInterface, e: RenderInput<'AbovePrompt'>, op
   )
   return (
     <Box key={`${key}-menu`} flexDirection="column" alignItems="flex-start">
-      <Button key={key} plain label={`${title}${isOpen ? ' ▴' : ' ▾'}`}
+      <Button key={key} plain={e.surface === 'desktop' ? undefined : true} label={`${title}${isOpen ? ' ▴' : ' ▾'}`}
         onPress={() => setOpen(isOpen ? null : { key })} />
       {isOpen ? (
         <Box key={`${key}-list`} flexDirection="column" flexShrink={0} paddingX={1} paddingTop={rowGap} rowGap={rowGap}>
