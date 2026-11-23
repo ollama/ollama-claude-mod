@@ -5,7 +5,6 @@ import { chevronSvg } from './icons'
 import { pickerMenu } from './menu'
 import type { Menu } from './menu'
 import { modelChoices, modelLabel } from './catalog'
-import { resolveNativeModel } from './models'
 import { desktopEffort } from './native-effort'
 
 export type UIState = ViewState & { activity?: ActivityState; isDark?: boolean; showResponseSpeed?: boolean }
@@ -123,7 +122,7 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
   const window = state.modelWindow?.model === model && state.modelWindow.endpoint === state.endpoint ? state.modelWindow : undefined
   const automaticContext = window?.detected ?? window?.defaultContext ?? (window?.override === undefined ? window?.effective : undefined)
   const contextValue = String(window?.override ?? automaticContext ?? 'auto')
-  const target = state.selection?.current ?? (preferences.enabled && preferences.mode === 'full' ? preferences.model : '')
+  const target = preferences.enabled && preferences.mode === 'full' ? preferences.model : ''
   const native = !target
   // A late response belongs to its captured target. Never present it as the
   // newly selected model (especially after switching back to Claude).
@@ -131,11 +130,9 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
   const isClaude = native || !!main?.model && /^(claude|opus|sonnet|haiku)/i.test(main.model)
   let modelId = main?.model || target
   if (preferences.enabled && native && (!modelId || modelId === 'default')) {
-    modelId = await $.session.model().then(model => resolveNativeModel($, model)).catch(() => '')
+    modelId = await $.session.model().catch(() => '')
   }
-  const title = displayName(native && modelId === 'default' ? '' : modelId)
-  const switchStatus = state.selection && (state.selection.status === 'pending' ? 'Switching…' : 'Switch failed')
-  const summary = [preferences.enabled ? title : undefined, switchStatus].filter(Boolean).join(' · ')
+  const summary = preferences.enabled ? displayName(native && modelId === 'default' ? '' : modelId) : ''
   const notice = state.notice || (preferences.enabled || state.settingsOpen ? state.connectionIssue : undefined)
   const rows = preferences.enabled ? state.activity?.subagents ?? [] : []
   const hidden = state.activity?.hidden ?? false
@@ -166,7 +163,6 @@ export async function renderUI($: EngineInterface, e: RenderInput<'AbovePrompt'>
         </Box>
         {picker({ key: 'compact-mode', label: '', value: preferences.enabled ? preferences.mode : 'never',
           options: modeOptions, onSelect: value => actions.setMode(value as Mode | 'never') })}
-        {state.selection?.status === 'failed' ? <Button key="retry-switch" plain label="Retry" onPress={() => actions.setMode(preferences.enabled ? preferences.mode : 'never')} /> : null}
         {isDesktop ? (
           <Box key="settings-control" flexDirection="row" alignItems="center" columnGap={0} flexShrink={0}>
             <Box width={settingsButtonColumns} flexShrink={0} alignItems="center" justifyContent="center">

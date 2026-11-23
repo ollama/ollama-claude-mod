@@ -95,6 +95,25 @@ test('routed main activity uses the Ollama model default even when Claude reques
   expect((await readActivity(f.engine)).main?.effort).toBe('max')
 })
 
+test('Full preserves the host step and applies Ollama model and effort to its HTTP request', async () => {
+  const f = fixture('full', true)
+  f.preferences.fullEffort = 'low'
+  f.engine.http.fetch = async () => ({ ...ok.value, text: JSON.stringify({ capabilities: ['tools'], thinking: { values: ['low', 'max'] } }) })
+  const step = { turnId: f.id, index: 0, model: 'claude-opus-5-5', effort: 'max' as const, messageCount: 1 }
+  const next = async function* (input: typeof step) {
+    expect(input).toEqual(step)
+    await executionFetch(f.engine, f.request(input.model), f.transport)
+    yield { kind: 'text', index: 0, text: 'done' }
+    return { turnId: f.id, index: 0, answer: 'done', toolUses: [], stopReason: 'end_turn' as const }
+  }
+  const stream = executionStep(f.engine, step, next as unknown as Parameters<Hook<'turn.step'>>[2])
+  for await (const _chunk of stream) { /* drain */ }
+  expect(f.sent).toHaveLength(1)
+  expect(f.sent[0]?.url).toBe('http://127.0.0.1:11434/v1/messages')
+  expect(JSON.parse(String(f.sent[0]?.init?.body))).toMatchObject({ model: 'ollama-model', output_config: { effort: 'low' } })
+  expect((await readActivity(f.engine)).main).toMatchObject({ model: 'ollama-model', effort: 'low' })
+})
+
 test('a thinking-only Ollama response counts its reported output once in both tok/s and chat totals', async () => {
   const f = fixture('full', true)
   let now = 0
@@ -150,7 +169,7 @@ test('HTTP failures stop routed requests, retain Ollama selection, and never rep
       expect(retry).toEqual(result)
     })
     await f.step(f.id, 'claude-original', async model => {
-      expect(model).toBe('ollama-model')
+      expect(model).toBe('claude-original')
       expect((await executionFetch(f.engine, f.request(model), next)).deny?.includes('/model')).toBe(true)
     }, undefined, 1)
     expect(f.sent.length).toBe(1)
@@ -190,7 +209,11 @@ test('Subagents keeps main native and a worker snapshot survives parent completi
   await executionSpawn(f.engine, { model: 'claude-worker', parentModel: 'claude-main', prompt: 'task', description: 'task', subagentType: 'Explore', tool_use_id: 'tool', provider: { plugin: 'engine', tier: 'core' } } as Parameters<Hook<'agent.spawn'>>[1], (async () => spawn) as unknown as Parameters<Hook<'agent.spawn'>>[2])
   f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, enabled: false } })
   await executionComplete(f.engine, { turnId: f.id } as Parameters<Hook<'turn.complete'>>[1], (async () => ({})) as unknown as Parameters<Hook<'turn.complete'>>[2])
-  await f.step(`${f.id}-child`, 'claude-worker', async model => { expect(model).toBe('ollama-model') }, spawn.agentId)
+  await f.step(`${f.id}-child`, 'claude-worker', async model => {
+    expect(model).toBe('claude-worker')
+    await executionFetch(f.engine, f.request(model, spawn.agentId), f.transport)
+  }, spawn.agentId)
+  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('ollama-model')
 })
 
 for (const mode of ['full', 'subagent'] as const) {
@@ -198,10 +221,13 @@ for (const mode of ['full', 'subagent'] as const) {
     const f = fixture(mode)
     const agentId = `${f.id}-resumed`
     const spawn = { parentModel: 'claude-native', prompt: 'Work', description: 'Work', subagentType: 'Explore' } as Parameters<Hook<'agent.spawn'>>[1]
-    const start = (async () => ({ agentId, model: 'claude-native' })) as unknown as Parameters<Hook<'agent.spawn'>>[2]
+    const start = (async (input: typeof spawn) => {
+      expect(input).toEqual(spawn)
+      return { agentId, model: 'claude-native' }
+    }) as unknown as Parameters<Hook<'agent.spawn'>>[2]
     await executionSpawn(f.engine, spawn, start)
     await f.step(`${f.id}-first`, 'claude-native', async model => {
-      expect(model).toBe('ollama-model')
+      expect(model).toBe('claude-native')
       await executionFetch(f.engine, f.request(model, agentId), f.transport)
     }, agentId)
     await executionComplete(f.engine, { agentId, turnId: `${f.id}-first`, answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' },
@@ -214,10 +240,11 @@ for (const mode of ['full', 'subagent'] as const) {
     }) as unknown as Parameters<Hook<'agent.spawn'>>[2])
     expect(resumed).toEqual(resume)
     await f.step(`${f.id}-resumed-turn`, 'claude-native', async model => {
-      expect(model).toBe('ollama-model')
+      expect(model).toBe('claude-native')
       await executionFetch(f.engine, f.request(model, agentId), f.transport)
     }, agentId)
     expect(f.sent[1]?.url).toBe('http://127.0.0.1:11434/v1/messages')
+    expect(f.sent.map(request => JSON.parse(String(request.init?.body)).model)).toEqual(['ollama-model', 'ollama-model'])
   })
 }
 
@@ -229,11 +256,18 @@ test('resuming an active worker retains its captured settings until completion',
   await executionSpawn(f.engine, spawn, start)
   f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, enabled: false } })
   await executionSpawn(f.engine, { ...spawn, resume: { agentId } }, start)
-  await f.step(`${f.id}-active-turn`, 'claude-native', async model => { expect(model).toBe('ollama-model') }, agentId)
+  await f.step(`${f.id}-active-turn`, 'claude-native', async model => {
+    expect(model).toBe('claude-native')
+    await executionFetch(f.engine, f.request(model, agentId), f.transport)
+  }, agentId)
   await executionComplete(f.engine, { agentId, turnId: `${f.id}-active-turn`, answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' },
     (async () => ({ text: 'done' })) as unknown as Parameters<Hook<'turn.complete'>>[2])
   await executionSpawn(f.engine, { ...spawn, resume: { agentId } }, start)
-  await f.step(`${f.id}-next-turn`, 'claude-native', async model => { expect(model).toBe('claude-native') }, agentId)
+  await f.step(`${f.id}-next-turn`, 'claude-native', async model => {
+    expect(model).toBe('claude-native')
+    await executionFetch(f.engine, f.request(model, agentId), f.transport)
+  }, agentId)
+  expect(f.sent.map(request => JSON.parse(String(request.init?.body)).model)).toEqual(['ollama-model', 'claude-native'])
 })
 
 test('Off and Subagents preserve native model changes within the main turn', async () => {
@@ -254,12 +288,23 @@ test('Off and Subagents preserve native model changes within the main turn', asy
 test('a conversation with a different model stops before either provider receives it', async () => {
   const f = fixture()
   await f.step(f.id, 'claude-original', async model => {
-    const mismatch = await executionFetch(f.engine, f.request('claude-original'), f.transport)
+    const mismatch = await executionFetch(f.engine, f.request('claude-unrelated'), f.transport)
     expect(mismatch.deny?.includes('did not match')).toBe(true)
     const retry = await executionFetch(f.engine, f.request(model), f.transport)
     expect(retry.deny).toEqual(mismatch.deny)
   })
   expect(f.sent).toEqual([])
+})
+
+test('routes the resolved default and extended-context wire IDs without changing the host step', async () => {
+  const f = fixture()
+  for (const [selected, wire] of [['default', 'claude-opus-5-5'], ['claude-opus-4-6[1m]', 'claude-opus-4-6']] as const) {
+    await f.step(`${f.id}-${selected}`, selected, async model => {
+      expect(model).toBe(selected)
+      expect((await executionFetch(f.engine, f.request(wire), f.transport)).deny).toBeUndefined()
+    })
+  }
+  expect(f.sent.map(request => JSON.parse(String(request.init?.body)).model)).toEqual(['ollama-model', 'ollama-model'])
 })
 
 test('classifier requests stay native and omit thinking-only Ollama replies', async () => {
@@ -305,16 +350,21 @@ test('native web search omits empty domain lists and preserves real restrictions
 
 test('preferences are captured for the turn and a new native model is captured next turn', async () => {
   const f = fixture()
-  await f.step(f.id, 'claude-original', async model => { expect(model).toBe('ollama-model') })
+  await f.step(f.id, 'claude-original', async model => {
+    expect(model).toBe('claude-original')
+    await executionFetch(f.engine, f.request(model), f.transport)
+  })
   f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, model: 'different-model' } })
-  await f.step(f.id, 'claude-original', async model => { expect(model).toBe('ollama-model') }, undefined, 1)
+  await f.step(f.id, 'claude-fallback', async model => {
+    expect(model).toBe('claude-fallback')
+    await executionFetch(f.engine, f.request(model), f.transport)
+  }, undefined, 1)
   const next = Object.assign(async (e: FetchInput) => {
     f.sent.push(e)
     return e.url.startsWith('https://api.anthropic.com') ? ok : { value: { ...ok.value, status: 503, ok: false } }
   }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
   await f.step(`${f.id}-new`, 'claude-new-selection', async model => { await executionFetch(f.engine, f.request(model), next) })
-  expect(f.sent.length).toBe(1)
-  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('different-model')
+  expect(f.sent.map(request => JSON.parse(String(request.init?.body)).model)).toEqual(['ollama-model', 'ollama-model', 'different-model'])
 })
 
 test('workflow workers continue tool calls with their own recorded assistant blocks', async () => {
@@ -515,7 +565,7 @@ test('a prior chat background worker does not report into the newly selected cha
   expect(reportAttempts > 0).toBe(true)
   reportAttempts = 0
   f.setSessionId(`${f.id}-new-chat`)
-  await f.step(`${f.id}-worker`, 'claude-worker', async model => { expect(model).toBe('ollama-model') }, agentId, 1)
+  await f.step(`${f.id}-worker`, 'claude-worker', async model => { expect(model).toBe('claude-worker') }, agentId, 1)
   expect(reportAttempts).toBe(0)
 })
 
@@ -749,7 +799,7 @@ test('an explicit native worker model does not replace the owner or global nativ
   expect(f.stored.get('native-model-v1:last')).toBe('claude-main')
 })
 
-test('native side requests can inherit the Ollama model after a completed turn', async () => {
+test('native side requests keep their own model after a completed Ollama turn', async () => {
   const f = fixture('full', true)
   await f.step(f.id, 'claude-saved', async model => { await executionFetch(f.engine, f.request(model), f.transport) })
   await executionComplete(f.engine, { turnId: f.id, answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' },
@@ -771,7 +821,7 @@ test('native side requests can inherit the Ollama model after a completed turn',
   expect(sideRequests.length).toBe(markers.length)
   for (const request of sideRequests) {
     expect(request.url).toBe('https://api.anthropic.com/v1/messages')
-    expect(JSON.parse(String(request.init?.body)).model).toBe('claude-saved')
+    expect(JSON.parse(String(request.init?.body)).model).toBe('ollama-model')
     expect(request.init?.headers?.authorization).toBe('native-secret')
   }
   expect(f.logs.filter(log => log.to === 'transcript')).toEqual([])
@@ -785,22 +835,22 @@ test('an untracked Ollama request is denied without reporting a failed chat turn
   expect(f.logs.filter(log => log.to === 'transcript')).toEqual([])
 })
 
-test('Off restores a known auxiliary Ollama selection to the native baseline', async () => {
+test('Off leaves a native auxiliary request alone even with an older model saved', async () => {
   const f = fixture()
   f.stored.set(`native-model-v1:${f.id}`, 'claude-saved')
   f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, enabled: false } })
   await f.step(f.id, 'ollama-model', async model => {
-    expect(model).toBe('claude-saved')
+    expect(model).toBe('ollama-model')
     const request = f.request('ollama-model')
     await executionFetch(f.engine, { ...request, init: { ...request.init, headers: { ...request.init?.headers, 'anthropic-beta': 'auto-mode-classifier-2026' } } }, f.transport)
   })
   expect(f.sent.length).toBe(1)
-  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('claude-saved')
+  expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('ollama-model')
   expect(f.sent[0]?.url).toBe('https://api.anthropic.com/v1/messages')
 })
 
 
-test('an unknown native baseline never sends the default alias in HTTP fallback', async () => {
+test('a failed Ollama call does not forward a literal default alias in a native side request', async () => {
   const f = fixture()
   const next = Object.assign(async (e: FetchInput) => { f.sent.push(e); return { value: { ...ok.value, status: 503, ok: false } } }, { signal: f.controller.signal, origin: { plugin: 'engine', tier: 'core' } }) as unknown as FetchNext
   await f.step(f.id, 'ollama-model', async model => {
@@ -810,13 +860,13 @@ test('an unknown native baseline never sends the default alias in HTTP fallback'
   expect(f.sent.length).toBe(1)
   expect(f.sent[0]?.url).toBe('http://127.0.0.1:11434/v1/messages')
   expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('ollama-model')
-  const request = f.request('ollama-model')
+  const request = f.request('default')
   const auxiliary = await executionFetch(f.engine, { ...request, init: { ...request.init, headers: { ...request.init?.headers, 'anthropic-beta': 'auto-mode-classifier-2026' } } }, next)
   expect(auxiliary.deny?.includes('/model') === true).toBe(true)
   expect(f.sent.length).toBe(1)
 })
 
-test('the first observed native main model is saved without changing native alias resolution', async () => {
+test('the host resolves the default without the mod writing a model preference', async () => {
   const f = fixture()
   f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, enabled: false } })
   await f.step(f.id, 'default', async model => {
@@ -826,35 +876,35 @@ test('the first observed native main model is saved without changing native alia
   expect(f.sent.length).toBe(1)
   expect(f.sent[0]?.url).toBe('https://api.anthropic.com/v1/messages')
   await f.step(`${f.id}-resolved`, 'claude-resolved', async model => { expect(model).toBe('claude-resolved') })
-  expect(f.stored.get(`native-model-v1:${f.id}`)).toBe('claude-resolved')
-  expect(f.stored.get('native-model-v1:last')).toBe('claude-resolved')
+  expect(f.stored.has(`native-model-v1:${f.id}`)).toBe(false)
+  expect(f.stored.has('native-model-v1:last')).toBe(false)
 })
 
 
-test('Subagents and Off keep native main and worker startup safe after an Ollama picker selection', async () => {
+test('Subagents and Off respect a host selection even when a former native fallback is saved', async () => {
   for (const enabled of [true, false]) {
     const f = fixture('subagent')
     f.stored.set(`preferences:${f.id}`, { version: 1, value: { ...f.preferences, enabled } })
     f.stored.set('native-model-v1:last', 'claude-global')
     await f.step(f.id, 'ollama-model', async model => {
-      expect(model).toBe('claude-global')
+      expect(model).toBe('ollama-model')
       await executionFetch(f.engine, f.request(model), f.transport)
     })
     expect(f.sent[0]?.url).toBe('https://api.anthropic.com/v1/messages')
-    expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('claude-global')
+    expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('ollama-model')
     const agentId = `${f.id}-worker`
     let startupModel = ''
     await executionSpawn(f.engine, { parentModel: 'ollama-model', prompt: 'task', description: 'task', subagentType: 'Explore', tool_use_id: 'tool', provider: { plugin: 'engine', tier: 'core' } } as Parameters<Hook<'agent.spawn'>>[1], (async (e: Parameters<Hook<'agent.spawn'>>[1]) => {
       startupModel = e.model ?? e.parentModel
       return { model: startupModel, agentId }
     }) as Parameters<Hook<'agent.spawn'>>[2])
-    expect(startupModel).toBe('claude-global')
+    expect(startupModel).toBe('ollama-model')
     await f.step(`${f.id}-worker`, startupModel, async model => {
-      expect(model).toBe(enabled ? 'ollama-model' : 'claude-global')
+      expect(model).toBe(startupModel)
       await executionFetch(f.engine, f.request(model, agentId), f.transport)
     }, agentId)
     expect(f.sent[1]?.url).toBe(enabled ? 'http://127.0.0.1:11434/v1/messages' : 'https://api.anthropic.com/v1/messages')
-    expect(JSON.parse(String(f.sent[1]?.init?.body)).model).toBe(enabled ? 'ollama-model' : 'claude-global')
+    expect(JSON.parse(String(f.sent[1]?.init?.body)).model).toBe('ollama-model')
   }
 })
 
@@ -892,7 +942,7 @@ test('Full sends the main request and parallel native Haiku agents to the select
   // Switching the model after launch affects new work only.
   f.stored.set(`preferences:${f.id}:model`, { version: 1, value: 'kimi-k3.1-pro:cloud' })
   await Promise.all(ids.map(agentId => f.step(`${agentId}-turn`, 'claude-haiku-resolved', async model => {
-    expect(model).toBe(selected)
+    expect(model).toBe('claude-haiku-resolved')
     await executionFetch(f.engine, f.request(model, agentId), f.transport)
   }, agentId)))
   expect(f.sent.every(request => request.url === 'http://127.0.0.1:11434/v1/messages')).toBe(true)
@@ -928,7 +978,7 @@ test('parallel workers keep their model through tool-result and inline-system co
         { role: 'system', content: [{ type: 'text', text: `native reminder ${index}` }] },
       ]
       await f.step(`${agentId}-turn`, 'claude-worker', async model => {
-        expect(model).toBe('ollama-model')
+        expect(model).toBe('claude-worker')
         const request = f.request(model, agentId)
         await executionFetch(f.engine, { ...request, init: { ...request.init, body: JSON.stringify({ model, thread: { type: 'continue' }, messages: delta }) } }, f.transport)
       }, agentId, index)

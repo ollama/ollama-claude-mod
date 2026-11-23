@@ -1,7 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { EngineInterface, Hook, On } from 'claude-code'
 import type { UIState } from '../hooks/ui'
-import { cancelSelection } from '../hooks/selection'
 import { desktopEffort } from '../hooks/native-effort'
 
 const initial: UIState = {
@@ -17,7 +16,6 @@ const props = { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows:
 const expectedModes = [{ value: 'full', label: 'Full' }, { value: 'subagent', label: 'Subagents' }, { value: 'never', label: 'Off' }]
 
 function setup(on: On, initialState = initial, entrypoint?: string) {
-  cancelSelection()
   let state = structuredClone(initialState)
   let sessionId = 'ui-test'
   let connectionRead: (() => Promise<unknown>) | undefined
@@ -69,6 +67,39 @@ function setup(on: On, initialState = initial, entrypoint?: string) {
     failStore: (key: string) => { failedStoreKey = key },
   }
 }
+
+test('CLI startup and Ollama preferences leave native model commands to the user', async ($, on) => {
+  const f = setup(on, initial, 'sdk-cli')
+  const sessionId = 'cli-native-model'
+  f.session(sessionId)
+  f.values.set('preference-defaults-v1', { version: 1, value: initial.preferences })
+  f.http((_, e) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(e.url.endsWith('/api/tags')
+    ? { models: [{ name: 'first' }, { name: 'second' }] } : { capabilities: ['tools'] }) } }))
+  const commands: string[] = []
+  on('classic.SessionStart', () => ({}))
+  on('session.model', () => ({ value: 'claude-sonnet-4-6' }))
+  on('settings.read', () => ({ value: {} }))
+  on('config.set', (_, e) => ({ value: e.value }))
+  on('command.run', { command: 'model' }, (_, e) => {
+    commands.push(e.args)
+    return { text: 'Native model command' }
+  })
+  await $.classic.SessionStart({ source: 'startup', session_id: sessionId })
+  await f.clock.advance(1000)
+  await f.clock.settle()
+  expect(commands).toEqual([])
+  const terminal = { origin: { kind: 'composer' as const }, presentation: { isFullscreen: false, columns: 80 } }
+  for (const args of ['model second', 'subagent', 'off', 'full']) {
+    await $.command.run({ ...terminal, command: 'ollama', args })
+    await f.clock.advance(1000)
+    await f.clock.settle()
+    expect(commands).toEqual([])
+  }
+  expect(f.state().preferences).toMatchObject({ enabled: true, mode: 'full', model: 'second' })
+  const manual = await $.command.run({ ...terminal, command: 'model', args: 'claude-sonnet-4-6' })
+  expect(manual.text).toBe('Native model command')
+  expect(commands).toEqual(['claude-sonnet-4-6'])
+})
 
 test('opening either picker shares cached discovery and refreshes native rows when it expires', async ($, on) => {
   const f = setup(on, { ...initial, endpoint: 'http://picker-refresh:11434' })
@@ -464,6 +495,7 @@ test('a native model picker change brings the mode summary back', async ($, on) 
     session_id: 'ui-test', from_model: 'first', to_model: 'second', requested_model: 'second', source: 'picker',
   } as Parameters<typeof $.classic.PostModelSwitch>[0])
   expect(await ui.find({ key: 'compact-mode' })).toBeDefined()
+  expect(fixture.processes.some(process => process.argv.includes('startup'))).toBe(false)
   await ui.unmount()
 })
 
@@ -952,12 +984,14 @@ test('Desktop mode commands update the controls quietly and status still reports
   expect(fixture.state().preferences.enabled).toBe(true)
 })
 
-test('Off keeps a failed switch visible without repeating the previous model', async ($, on) => {
-  setup(on, { ...initial, preferences: { ...initial.preferences, enabled: false },
-    selection: { target: '', current: 'first', status: 'failed' } })
-  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'terminal', component: 'AbovePrompt', requestId: 'off-switch-failed', props })
-  expect((await ui.find({ type: 'Text', text: 'Switch failed' }))?.text).toBe('Switch failed')
-  expect(await ui.find({ key: 'retry-switch' })).toBeDefined()
+test('a chat with an old switch failure opens with its saved Ollama model', async ($, on) => {
+  const notice = 'The model switch did not finish. Choose a model with /model or select the use setting again to retry.'
+  const legacyView = { ...initial, owner: 'ui-test', selection: { target: 'first', current: '', status: 'failed' }, notice }
+  setup(on, legacyView)
+  const ui = await $.ui.mount({ plugin: 'ollama', surface: 'terminal', component: 'AbovePrompt', requestId: 'previous-switch', props })
+  expect(await ui.find({ type: 'Text', text: 'First' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: notice })).toBeUndefined()
+  expect(await ui.find({ key: 'retry-switch' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -1014,14 +1048,14 @@ test('Desktop reads only the launch effort of the current chat and model', async
   expect(reads).toHaveLength(before)
 })
 
-test('Subagents shows the native model behind a saved Ollama picker selection before a turn', async ($, on) => {
+test('Subagents shows the current session selection before a turn even with an older fallback saved', async ($, on) => {
   const f = setup(on, { ...initial, preferences: { ...initial.preferences, mode: 'subagent' } })
   f.values.set('native-model-v1:ui-test', 'claude-sonnet-4-6')
-  let selectedModel = initial.preferences.model
+  let selectedModel = 'deepseek-v4.1-flash:cloud'
   on('session.model', () => ({ value: selectedModel }))
   on('settings.read', () => ({ value: {} }))
   const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: 'native-model-label', props })
-  expect((await ui.find({ type: 'Text', text: 'Sonnet 4.6' }))?.text).toBe('Sonnet 4.6')
+  expect((await ui.find({ type: 'Text', text: 'DeepSeek v4.1 Flash' }))?.text).toBe('DeepSeek v4.1 Flash')
 
   selectedModel = 'default'
   await ui.redraw(props)
@@ -1029,17 +1063,6 @@ test('Subagents shows the native model behind a saved Ollama picker selection be
   expect(f.writes).toEqual([])
   await ui.unmount()
 })
-
-for (const status of ['pending', 'failed'] as const) {
-  test(`${status} main switches show the actual native model, not the requested Ollama model`, async ($, on) => {
-    setup(on, { ...initial, selection: { target: 'first', current: '', status }, activity: {
-      owner: 'ui-test', hidden: false, subagents: [], main: { target: '', model: 'claude-opus-5-5', tokens: 0, running: false },
-    } })
-    const ui = await $.ui.mount({ plugin: 'ollama', surface: 'desktop', component: 'AbovePrompt', requestId: `switch-${status}`, props })
-    expect(await ui.find({ type: 'Text', text: `Opus 5.5 · ${status === 'pending' ? 'Switching…' : 'Switch failed'}` })).toBeDefined()
-    await ui.unmount()
-  })
-}
 
 for (const surface of ['desktop', 'terminal'] as const) {
   test(`${surface}: narrow settings keep the close button and primary controls visible`, async ($, on) => {
@@ -1130,17 +1153,6 @@ for (const surface of ['desktop', 'terminal'] as const) {
       await ui.press({ key: 'compact-mode' })
       await ui.press({ key: 'compact-mode-option-never' })
     }
-    await ui.unmount()
-  })
-
-  test(`${surface}: failed model switches expose a retry that preserves the requested models`, async ($, on) => {
-    const f = setup(on, { ...initial, selection: { target: 'first', current: '', status: 'failed' } })
-    const ui = await $.ui.mount({ plugin: 'ollama', surface, component: 'AbovePrompt', requestId: `retry-switch-${surface}`, props })
-    expect((await ui.find({ key: 'retry-switch' }))?.props.label).toBe('Retry')
-    await ui.press({ key: 'retry-switch' })
-    expect(f.state().preferences).toEqual(initial.preferences)
-    expect(f.values.get('preferences:ui-test:mode')).toEqual({ version: 1, value: 'full' })
-    expect(f.values.has('preferences:ui-test:model')).toBe(false)
     await ui.unmount()
   })
 
