@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { EngineInterface, Hook, TurnUsage } from 'claude-code'
 import type { Preferences } from '../hooks/settings'
-import { executionComplete, executionFetch, executionSpawn, executionStep } from '../hooks/execution'
+import { executionComplete, executionFetch, executionSpawn, executionStep, recordWorkflowResponse } from '../hooks/execution'
 import { readView, updateView } from '../hooks/runtime'
 import { readActivity, resetActivity } from '../hooks/activity'
 
@@ -315,6 +315,46 @@ test('preferences are captured for the turn and a new native model is captured n
   await f.step(`${f.id}-new`, 'claude-new-selection', async model => { await executionFetch(f.engine, f.request(model), next) })
   expect(f.sent.length).toBe(1)
   expect(JSON.parse(String(f.sent[0]?.init?.body)).model).toBe('different-model')
+})
+
+test('workflow workers continue tool calls with their own recorded assistant blocks', async () => {
+  const f = fixture('subagent')
+  f.engine.session.messages = async () => { throw new Error('Workflow transcripts are unavailable') }
+  const workers = [`${f.id}-left`, `${f.id}-right`]
+  await Promise.all(workers.map(async (agentId, index) => {
+    const spawn = { parentModel: 'claude-native', prompt: 'Read', description: 'Read', workflow: { runId: f.id, agentIndex: index + 1 } }
+    await executionSpawn(f.engine, spawn as Parameters<Hook<'agent.spawn'>>[1],
+      (async () => ({ agentId, model: 'claude-native' })) as unknown as Parameters<Hook<'agent.spawn'>>[2])
+    await f.step(agentId, 'claude-native', async model => { await executionFetch(f.engine, f.request(model, agentId), f.transport) }, agentId)
+
+    type Append = Hook<'session.append'>
+    let rowIndex = 0
+    const append = async (content: Parameters<Append>[1]['message']['content']) => {
+      const event = { agentId, door: 'response', uuid: `${agentId}-${++rowIndex}`, message: { type: 'assistant', role: 'assistant', content } } as Parameters<Append>[1]
+      await recordWorkflowResponse(f.engine, event, (async () => ({ uuid: event.uuid, message: event.message })) as unknown as Parameters<Append>[2])
+    }
+    const continued = (model: string, messages: unknown[]) => {
+      const request = f.request(model, agentId)
+      return executionFetch(f.engine, { ...request, init: { ...request.init, body: JSON.stringify({ model, thread: { type: 'continue' }, messages }) } }, f.transport)
+    }
+    const thinking = { type: 'thinking', thinking: agentId }
+    const call = { type: 'tool_use', id: agentId, name: 'Read', input: { file_path: agentId } }
+    const otherCall = { ...call, id: `${agentId}-parallel` }
+    await append([thinking])
+    await append([call, otherCall])
+    const result = { role: 'user', content: [otherCall, call].map(tool => ({ type: 'tool_result', tool_use_id: tool.id, content: 'fixture' })) }
+    const update = { role: 'system', content: [{ type: 'text', text: `context for ${agentId}` }] }
+    await f.step(agentId, 'claude-native', async model => { expect(await continued(model, [result, update])).toBe(ok) }, agentId, 1)
+    const followup = f.sent.map(input => JSON.parse(String(input.init?.body))).find(body =>
+      body.messages?.at(-1)?.content?.[0]?.text === update.content[0]!.text)
+    expect(followup.messages).toEqual([{ role: 'user', content: 'hello' }, { role: 'assistant', content: [thinking, call, otherCall] }, result, update])
+
+    await append([{ ...call, id: `${agentId}-next` }])
+    // A previous step's result must not satisfy this step's tool call.
+    const stale = { ...result, content: result.content.slice(0, 1) }
+    await f.step(agentId, 'claude-native', async model => { expect((await continued(model, [stale])).deny).toContain('could not be matched') }, agentId, 2)
+  }))
+  expect(f.sent).toHaveLength(4)
 })
 
 test('thread continuation without a saved beginning stops before sending', async () => {

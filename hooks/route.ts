@@ -61,7 +61,7 @@ export function parseShow(text: string): Pick<OllamaModel, 'contextLength' | 'pa
   }
 }
 
-type Block = { type: string; text?: string; signature?: string; input_schema?: unknown; allowed_domains?: string[]; blocked_domains?: string[]; cache_control?: { ttl?: string; scope?: string } }
+type Block = { type: string; text?: string; signature?: string; id?: string; tool_use_id?: string; input_schema?: unknown; allowed_domains?: string[]; blocked_domains?: string[]; cache_control?: { ttl?: string; scope?: string } }
 type Message = { role: string; content: string | Block[] }
 type Body = {
   model?: string
@@ -79,6 +79,24 @@ export function wholeRequest(before: Body, request: Body, reply: Message | undef
   const replied = reply !== undefined && added[0]?.role !== 'assistant' ? [reply] : []
 
   return { ...request, system: before.system, tools: request.tools ?? before.tools, thread: undefined, messages: [...(before.messages ?? []), ...replied, ...added] }
+}
+
+// Workflow agents publish the assistant reply one row at a time. Pair its
+// tool calls with this continuation before attaching it to the saved request.
+export function workflowContinuation(before: Body | undefined, rows: (Block[] | undefined)[], request: Body): Body | undefined {
+  const added = request.messages ?? []
+  if (!before?.messages?.length || rows.includes(undefined) || added[0]?.role !== 'user' ||
+      added.some(message => message.role !== 'user' && message.role !== 'system')) return undefined
+
+  const content = rows.flatMap(row => row ?? [])
+  if (!content.length) return undefined
+  const calls = content.filter(block => block.type === 'tool_use').map(block => block.id)
+  const results = added.flatMap(message => message.role === 'user' && Array.isArray(message.content)
+    ? message.content.filter(block => block.type === 'tool_result') : [])
+  const pending = new Set(calls)
+  if (calls.length !== results.length) return undefined
+  if (results.some(block => typeof block.tool_use_id !== 'string' || !pending.delete(block.tool_use_id))) return undefined
+  return wholeRequest(before, request, { role: 'assistant', content })
 }
 
 export function toOllamaBody(body: Body, model: string, thinking?: Thinking): string {
